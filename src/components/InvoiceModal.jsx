@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogClose } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/use-toast';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-const InvoiceModal = ({ isOpen, onClose, bookingData }) => {
+const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hideSuratJalan: hideSuratJalanProp }) => {
   const { toast } = useToast();
   const API_BASE = import.meta?.env?.VITE_API_URL || "http://localhost:8080";
 
@@ -22,6 +22,31 @@ const InvoiceModal = ({ isOpen, onClose, bookingData }) => {
 
   // helper
   const norm = (v) => String(v || "").trim().toLowerCase();
+
+  // ✅ NEW: mode "docs only" (tanpa surat jalan) dari query / props
+  const docsCtx = useMemo(() => {
+    const safe = { docsMode: "", hideSuratJalan: false };
+    try {
+      // props punya prioritas (kalau nanti kamu mau passing langsung)
+      const docsModeFromProps = String(docsModeProp || "").trim();
+      const hideFromProps = !!hideSuratJalanProp;
+
+      // fallback dari query string
+      const sp = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+      const docsModeFromQuery = sp ? String(sp.get("docs") || "").trim() : "";
+      const hideFromQuery =
+        sp ? (sp.get("hideSuratJalan") === "1" || sp.get("hideSuratJalan") === "true") : false;
+
+      const docsMode = docsModeFromProps || docsModeFromQuery || "";
+      const hideSuratJalan = hideFromProps || hideFromQuery || docsMode === "eticket-invoice";
+
+      return { docsMode, hideSuratJalan };
+    } catch {
+      return safe;
+    }
+  }, [docsModeProp, hideSuratJalanProp]);
+
+  const hideSuratJalan = !!docsCtx.hideSuratJalan;
 
   const isPaid = useMemo(() => {
     const st = norm(paymentStatus);
@@ -64,8 +89,13 @@ const InvoiceModal = ({ isOpen, onClose, bookingData }) => {
       return false;
     })();
 
-    setActiveTab(paid ? "ticket" : "surat-jalan");
-  }, [isOpen, bookingData]);
+    // ✅ FIX: kalau mode docs-only, jangan pernah pindah ke surat-jalan
+    if (hideSuratJalan) {
+      setActiveTab("ticket");
+    } else {
+      setActiveTab(paid ? "ticket" : "surat-jalan");
+    }
+  }, [isOpen, bookingData, hideSuratJalan]);
 
   if (!bookingData) return null;
 
@@ -145,6 +175,8 @@ const InvoiceModal = ({ isOpen, onClose, bookingData }) => {
         setActiveTab("ticket");
       } else {
         toast({ title: "Belum Lunas", description: `Status: ${ps || "Belum Bayar"}` });
+        // ✅ FIX: jangan paksa ke surat-jalan kalau memang disembunyikan
+        if (!hideSuratJalan) setActiveTab("surat-jalan");
       }
     } catch (e) {
       toast({ title: "Gagal", description: e?.message || "Terjadi kesalahan saat cek status." });
@@ -155,7 +187,9 @@ const InvoiceModal = ({ isOpen, onClose, bookingData }) => {
 
   // ===== Fetch Surat Jalan dari backend ketika tab aktif =====
   useEffect(() => {
+    // ✅ FIX: kalau hideSuratJalan, jangan fetch surat jalan sama sekali
     const shouldFetch =
+      !hideSuratJalan &&
       isOpen &&
       isReguler &&
       !isPPOB &&
@@ -184,7 +218,7 @@ const InvoiceModal = ({ isOpen, onClose, bookingData }) => {
       .finally(() => setSuratLoading(false));
 
     return () => controller.abort();
-  }, [isOpen, activeTab, actualBookingId, isReguler, isPPOB, API_BASE, toast]);
+  }, [isOpen, activeTab, actualBookingId, isReguler, isPPOB, API_BASE, toast, hideSuratJalan]);
 
   const handleDownload = () => {
     // ✅ gating download: ticket/invoice tidak boleh kalau belum lunas
@@ -240,7 +274,9 @@ const InvoiceModal = ({ isOpen, onClose, bookingData }) => {
         <div className="font-bold">{title} dikunci</div>
         <div className="mt-1 text-red-200">
           Untuk metode <b>Transfer/QRIS</b>, {title.toLowerCase()} hanya tampil setelah admin mengubah status menjadi <b>Lunas</b>.
-          Anda tetap bisa melihat <b>E-Surat Jalan</b>.
+          {!hideSuratJalan ? (
+            <> Anda tetap bisa melihat <b>E-Surat Jalan</b>.</>
+          ) : null}
         </div>
       </div>
     </div>
@@ -313,13 +349,27 @@ const InvoiceModal = ({ isOpen, onClose, bookingData }) => {
                   description: "E-ticket & invoice hanya muncul setelah pembayaran Lunas.",
                   variant: "destructive"
                 });
+
+                // ✅ FIX: kalau surat jalan disembunyikan, jangan arahkan ke surat-jalan
+                if (hideSuratJalan) {
+                  setActiveTab("ticket");
+                  return;
+                }
+
                 setActiveTab("surat-jalan");
                 return;
               }
+
+              // ✅ FIX: kalau hideSuratJalan, ignore request ke tab surat-jalan
+              if (v === "surat-jalan" && hideSuratJalan) {
+                setActiveTab("ticket");
+                return;
+              }
+
               setActiveTab(v);
             }} className="w-full">
 
-              <TabsList className="grid w-full grid-cols-2 mb-8 bg-slate-800">
+              <TabsList className={`grid w-full ${hideSuratJalan ? "grid-cols-1" : "grid-cols-2"} mb-8 bg-slate-800`}>
                 <TabsTrigger
                   value="ticket"
                   disabled={!isPaid}
@@ -338,12 +388,14 @@ const InvoiceModal = ({ isOpen, onClose, bookingData }) => {
                   )}
                 </TabsTrigger>
 
-                <TabsTrigger
-                  value="surat-jalan"
-                  className="data-[state=active]:bg-white data-[state=active]:text-black font-bold border border-transparent data-[state=active]:border-slate-200"
-                >
-                  <FileSpreadsheet className="w-4 h-4 mr-2" /> E-Surat Jalan
-                </TabsTrigger>
+                {!hideSuratJalan ? (
+                  <TabsTrigger
+                    value="surat-jalan"
+                    className="data-[state=active]:bg-white data-[state=active]:text-black font-bold border border-transparent data-[state=active]:border-slate-200"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 mr-2" /> E-Surat Jalan
+                  </TabsTrigger>
+                ) : null}
               </TabsList>
 
               {/* TAB 1: TICKET & INVOICE */}
@@ -496,121 +548,123 @@ const InvoiceModal = ({ isOpen, onClose, bookingData }) => {
               </TabsContent>
 
               {/* TAB 2: SURAT JALAN */}
-              <TabsContent value="surat-jalan" className="mt-0">
-                <div className="w-full bg-white text-black p-8 font-sans min-h-[600px] border border-gray-200 shadow-xl">
-                  <div className="flex items-start justify-between mb-6">
-                    <div className="flex items-center gap-4">
-                      <div className="w-20 h-20 bg-white border-2 border-black rounded-full p-1 flex items-center justify-center shrink-0">
-                        <img
-                          src="https://horizons-cdn.hostinger.com/aa3a21e0-4488-4247-a025-83814179d1a2/c29b7033714ce9b851a1fd1b040f6cfb.jpg"
-                          className="w-full h-full object-contain rounded-full"
-                          alt="Logo"
-                        />
+              {!hideSuratJalan ? (
+                <TabsContent value="surat-jalan" className="mt-0">
+                  <div className="w-full bg-white text-black p-8 font-sans min-h-[600px] border border-gray-200 shadow-xl">
+                    <div className="flex items-start justify-between mb-6">
+                      <div className="flex items-center gap-4">
+                        <div className="w-20 h-20 bg-white border-2 border-black rounded-full p-1 flex items-center justify-center shrink-0">
+                          <img
+                            src="https://horizons-cdn.hostinger.com/aa3a21e0-4488-4247-a025-83814179d1a2/c29b7033714ce9b851a1fd1b040f6cfb.jpg"
+                            className="w-full h-full object-contain rounded-full"
+                            alt="Logo"
+                          />
+                        </div>
+                        <div>
+                          <h1 className="text-3xl font-black uppercase tracking-tight leading-none mb-1">PT. LANCANG KUNING TRAVELINDO</h1>
+                          <h2 className="text-2xl font-bold uppercase tracking-wider text-center">SURAT JALAN</h2>
+                        </div>
                       </div>
-                      <div>
-                        <h1 className="text-3xl font-black uppercase tracking-tight leading-none mb-1">PT. LANCANG KUNING TRAVELINDO</h1>
-                        <h2 className="text-2xl font-bold uppercase tracking-wider text-center">SURAT JALAN</h2>
+
+                      <div className="text-right text-sm font-bold space-y-1 min-w-[250px]">
+                        <div className="flex justify-between items-center border-b border-black border-dashed pb-1">
+                          <span>No. Pol :</span>
+                          <span className="font-mono ml-2">..............</span>
+                        </div>
+                        <div className="flex justify-between items-center border-b border-black border-dashed pb-1">
+                          <span>Tanggal :</span>
+                          <span className="font-mono ml-2">{formatDate(suratJalan?.tripDate || date)}</span>
+                        </div>
+                        <div className="flex justify-between items-center border-b border-black border-dashed pb-1">
+                          <span>Driver :</span>
+                          <span className="font-mono ml-2">..............</span>
+                        </div>
                       </div>
                     </div>
 
-                    <div className="text-right text-sm font-bold space-y-1 min-w-[250px]">
-                      <div className="flex justify-between items-center border-b border-black border-dashed pb-1">
-                        <span>No. Pol :</span>
-                        <span className="font-mono ml-2">..............</span>
-                      </div>
-                      <div className="flex justify-between items-center border-b border-black border-dashed pb-1">
-                        <span>Tanggal :</span>
-                        <span className="font-mono ml-2">{formatDate(suratJalan?.tripDate || date)}</span>
-                      </div>
-                      <div className="flex justify-between items-center border-b border-black border-dashed pb-1">
-                        <span>Driver :</span>
-                        <span className="font-mono ml-2">..............</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="w-full mb-12 border-2 border-black">
-                    <table className="w-full text-sm border-collapse">
-                      <thead>
-                        <tr className="border-b-2 border-black">
-                          <th className="border-r border-black p-2 w-10 text-center font-bold uppercase">No.</th>
-                          <th className="border-r border-black p-2 text-left font-bold uppercase">Nama / Nomor HP</th>
-                          <th className="border-r border-black p-2 text-left font-bold uppercase w-1/5">Jemput</th>
-                          <th className="border-r border-black p-2 text-left font-bold uppercase w-1/5">Tujuan</th>
-                          <th className="border-r border-black p-2 text-center font-bold uppercase w-24">Tarif</th>
-                          <th className="p-2 text-center font-bold uppercase w-28">Keterangan</th>
-                        </tr>
-                      </thead>
-
-                      <tbody className="divide-y divide-black">
-                        {suratLoading ? (
-                          <tr className="h-10">
-                            <td colSpan={6} className="p-4 text-center font-bold">Loading Surat Jalan...</td>
+                    <div className="w-full mb-12 border-2 border-black">
+                      <table className="w-full text-sm border-collapse">
+                        <thead>
+                          <tr className="border-b-2 border-black">
+                            <th className="border-r border-black p-2 w-10 text-center font-bold uppercase">No.</th>
+                            <th className="border-r border-black p-2 text-left font-bold uppercase">Nama / Nomor HP</th>
+                            <th className="border-r border-black p-2 text-left font-bold uppercase w-1/5">Jemput</th>
+                            <th className="border-r border-black p-2 text-left font-bold uppercase w-1/5">Tujuan</th>
+                            <th className="border-r border-black p-2 text-center font-bold uppercase w-24">Tarif</th>
+                            <th className="p-2 text-center font-bold uppercase w-28">Keterangan</th>
                           </tr>
-                        ) : (
-                          <>
-                            {Array.from({ length: 7 }, (_, i) => {
-                              const p = paxList[i];
-                              const hasData = !!p?.name;
+                        </thead>
 
-                              return (
-                                <tr key={i} className="h-10">
-                                  <td className="border-r border-black p-2 text-center font-bold">{i + 1}</td>
+                        <tbody className="divide-y divide-black">
+                          {suratLoading ? (
+                            <tr className="h-10">
+                              <td colSpan={6} className="p-4 text-center font-bold">Loading Surat Jalan...</td>
+                            </tr>
+                          ) : (
+                            <>
+                              {Array.from({ length: 7 }, (_, i) => {
+                                const p = paxList[i];
+                                const hasData = !!p?.name;
 
-                                  <td className="border-r border-black p-2 font-bold uppercase">
-                                    {hasData ? (
-                                      <>
-                                        {p.name} {p.seat ? <span className="font-normal text-xs">({String(p.seat).toUpperCase()})</span> : null}
-                                        <br />
-                                        <span className="font-normal text-xs">{hpSJ}</span>
-                                      </>
-                                    ) : null}
-                                  </td>
+                                return (
+                                  <tr key={i} className="h-10">
+                                    <td className="border-r border-black p-2 text-center font-bold">{i + 1}</td>
 
-                                  <td className="border-r border-black p-2 uppercase text-xs font-semibold">
-                                    {hasData ? (jemputSJ || "") : ""}
-                                  </td>
+                                    <td className="border-r border-black p-2 font-bold uppercase">
+                                      {hasData ? (
+                                        <>
+                                          {p.name} {p.seat ? <span className="font-normal text-xs">({String(p.seat).toUpperCase()})</span> : null}
+                                          <br />
+                                          <span className="font-normal text-xs">{hpSJ}</span>
+                                        </>
+                                      ) : null}
+                                    </td>
 
-                                  <td className="border-r border-black p-2 uppercase text-xs font-semibold">
-                                    {hasData ? (tujuanSJ || "") : ""}
-                                  </td>
+                                    <td className="border-r border-black p-2 uppercase text-xs font-semibold">
+                                      {hasData ? (jemputSJ || "") : ""}
+                                    </td>
 
-                                  <td className="border-r border-black p-2 text-right">
-                                    {hasData ? (tarifPerSeat ? tarifPerSeat.toLocaleString() : "") : ""}
-                                  </td>
+                                    <td className="border-r border-black p-2 uppercase text-xs font-semibold">
+                                      {hasData ? (tujuanSJ || "") : ""}
+                                    </td>
 
-                                  <td className="p-2 text-center text-[10px] font-bold">
-                                    {hasData ? (isPaid ? "LUNAS" : (displayPaymentStatus || "BELUM BAYAR").toUpperCase()) : ""}
+                                    <td className="border-r border-black p-2 text-right">
+                                      {hasData ? (tarifPerSeat ? tarifPerSeat.toLocaleString() : "") : ""}
+                                    </td>
+
+                                    <td className="p-2 text-center text-[10px] font-bold">
+                                      {hasData ? (isPaid ? "LUNAS" : (displayPaymentStatus || "BELUM BAYAR").toUpperCase()) : ""}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+
+                              {paxList.length === 0 ? (
+                                <tr>
+                                  <td colSpan={6} className="p-3 text-center text-xs font-semibold">
+                                    Tidak ada data penumpang dari backend. Cek endpoint: <code>/api/reguler/bookings/{String(actualBookingId)}/surat-jalan</code>
                                   </td>
                                 </tr>
-                              );
-                            })}
-
-                            {paxList.length === 0 ? (
-                              <tr>
-                                <td colSpan={6} className="p-3 text-center text-xs font-semibold">
-                                  Tidak ada data penumpang dari backend. Cek endpoint: <code>/api/reguler/bookings/{String(actualBookingId)}/surat-jalan</code>
-                                </td>
-                              </tr>
-                            ) : null}
-                          </>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="flex justify-between px-16 text-center text-sm font-bold uppercase">
-                    <div className="flex flex-col gap-16">
-                      <span>Pengemudi</span>
-                      <span className="border-t border-black pt-1 px-4 min-w-[150px]">(.........................)</span>
+                              ) : null}
+                            </>
+                          )}
+                        </tbody>
+                      </table>
                     </div>
-                    <div className="flex flex-col gap-16">
-                      <span>Pengurus</span>
-                      <span className="border-t border-black pt-1 px-4 min-w-[150px]">(.........................)</span>
+
+                    <div className="flex justify-between px-16 text-center text-sm font-bold uppercase">
+                      <div className="flex flex-col gap-16">
+                        <span>Pengemudi</span>
+                        <span className="border-t border-black pt-1 px-4 min-w-[150px]">(.........................)</span>
+                      </div>
+                      <div className="flex flex-col gap-16">
+                        <span>Pengurus</span>
+                        <span className="border-t border-black pt-1 px-4 min-w-[150px]">(.........................)</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </TabsContent>
+                </TabsContent>
+              ) : null}
             </Tabs>
           ) : (
             // bagian NON-REGULER / PPOB kamu biarkan

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -29,15 +30,28 @@ import { useToast } from '@/components/ui/use-toast';
 // - bisa berupa marker: "BOOKING:<id>" (dokumen ada di halaman booking)
 // ==============================
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080';
-const BOOKING_PAGE_PATH = import.meta.env.VITE_BOOKING_PAGE_PATH || '/reguler';
+// ✅ FIX: default route booking di App.jsx adalah "/booking".
+// (Kalau env VITE_BOOKING_PAGE_PATH diset, tetap akan dipakai.)
+const BOOKING_PAGE_PATH = import.meta.env.VITE_BOOKING_PAGE_PATH || '/booking';
 
 function isBookingMarker(v) {
-  return typeof v === 'string' && v.startsWith('BOOKING:');
+  return (
+    typeof v === 'string' &&
+    (v.startsWith('BOOKING:') || v.startsWith('ETICKET_INVOICE_FROM_BOOKING:'))
+  );
 }
 
 function parseBookingId(marker) {
   if (!isBookingMarker(marker)) return null;
-  const idStr = marker.slice('BOOKING:'.length).trim();
+
+  const s = String(marker);
+  let idStr = '';
+  if (s.startsWith('BOOKING:')) {
+    idStr = s.slice('BOOKING:'.length).trim();
+  } else if (s.startsWith('ETICKET_INVOICE_FROM_BOOKING:')) {
+    idStr = s.slice('ETICKET_INVOICE_FROM_BOOKING:'.length).trim();
+  }
+
   const id = Number(idStr);
   return Number.isFinite(id) && id > 0 ? id : null;
 }
@@ -60,14 +74,22 @@ function resolveToAbsoluteUrl(v) {
   return v;
 }
 
-function openETicket(v) {
+function openETicket(v, navigate) {
   if (!v) return;
 
   // marker: buka halaman booking agar user bisa lihat invoice/e-ticket
   const bookingId = parseBookingId(v);
   if (bookingId) {
-    const url = `${BOOKING_PAGE_PATH}?bookingId=${bookingId}`;
-    window.open(url, '_blank');
+    // ✅ FIX: buka via SPA (tidak reload) + hanya tampilkan E-Ticket & Invoice.
+    // Surat jalan tetap ada di Trip Information (bukan dari Passenger Info).
+    const url = `${BOOKING_PAGE_PATH}?bookingId=${bookingId}&showDocs=1&docs=eticket-invoice&hideSuratJalan=1`;
+
+    if (typeof navigate === 'function') {
+      navigate(url);
+    } else {
+      // fallback kalau dipakai di luar react-router
+      window.open(url, '_self');
+    }
     return;
   }
 
@@ -75,68 +97,11 @@ function openETicket(v) {
   if (url) window.open(url, '_blank');
 }
 
-// ==============================
-// ✅ Tambahan helpers: ambil bookingId dari hint/notes
-// ==============================
-function parseBookingIdFromInvoiceHint(hint) {
-  if (!hint || typeof hint !== 'string') return null;
-
-  // contoh: "ETICKET_INVOICE_FROM_BOOKING:123"
-  const idx = hint.lastIndexOf(':');
-  if (idx < 0) return null;
-  const idStr = hint.slice(idx + 1).trim();
-  const id = Number(idStr);
-  return Number.isFinite(id) && id > 0 ? id : null;
-}
-
-function tryParseLastJsonFromNotes(notes) {
-  if (!notes || typeof notes !== 'string') return null;
-
-  // biasanya sync nempel JSON di akhir notes (baris terakhir)
-  // cari '{' terakhir, coba parse dari situ.
-  const lastBrace = notes.lastIndexOf('{');
-  if (lastBrace < 0) return null;
-
-  const candidate = notes.slice(lastBrace).trim();
-  if (!candidate.startsWith('{') || !candidate.endsWith('}')) return null;
-
-  try {
-    const obj = JSON.parse(candidate);
-    return obj && typeof obj === 'object' ? obj : null;
-  } catch (e) {
-    return null;
-  }
-}
-
-function computeEffectiveETicketValue(passenger) {
-  // 1) kalau sudah ada eTicketPhoto, pakai itu
-  if (passenger?.eTicketPhoto) return passenger.eTicketPhoto;
-
-  // 2) coba dari field backend baru (jika ada)
-  const hint = passenger?.eTicketInvoiceHint;
-  const bidFromHint = parseBookingIdFromInvoiceHint(hint);
-  if (bidFromHint) return `BOOKING:${bidFromHint}`;
-
-  // 3) coba dari notes JSON sync (bookingId)
-  const syncObj = tryParseLastJsonFromNotes(passenger?.notes);
-  const bidFromNotes = syncObj?.bookingId ? Number(syncObj.bookingId) : null;
-  if (Number.isFinite(bidFromNotes) && bidFromNotes > 0) {
-    return `BOOKING:${bidFromNotes}`;
-  }
-
-  // 4) jika backend mengirim bookingId langsung
-  const bidDirect = passenger?.bookingId ? Number(passenger.bookingId) : null;
-  if (Number.isFinite(bidDirect) && bidDirect > 0) {
-    return `BOOKING:${bidDirect}`;
-  }
-
-  return '';
-}
-
 import DashboardLayout from '@/components/DashboardLayout';
 
 const PassengerInfo = () => {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [passengers, setPassengers] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -156,12 +121,6 @@ const PassengerInfo = () => {
     driverName: '',
     vehicleCode: '',
     notes: '',
-
-    // ✅ Tambahan fields (tidak mengganggu, untuk kompatibilitas data baru backend)
-    bookingId: '',
-    eTicketInvoiceHint: '',
-    bookingHint: '',
-    suratJalanApi: '',
   });
 
   // Fetch passengers data
@@ -208,12 +167,6 @@ const PassengerInfo = () => {
       driverName: '',
       vehicleCode: '',
       notes: '',
-
-      // ✅ Tambahan fields (tidak mengganggu)
-      bookingId: '',
-      eTicketInvoiceHint: '',
-      bookingHint: '',
-      suratJalanApi: '',
     });
     setCurrentPassenger(null);
   };
@@ -235,12 +188,6 @@ const PassengerInfo = () => {
         driverName: passenger.driverName || '',
         vehicleCode: passenger.vehicleCode || '',
         notes: passenger.notes || '',
-
-        // ✅ Tambahan fields (kalau backend mengirim)
-        bookingId: passenger.bookingId || '',
-        eTicketInvoiceHint: passenger.eTicketInvoiceHint || '',
-        bookingHint: passenger.bookingHint || '',
-        suratJalanApi: passenger.suratJalanApi || '',
       });
     } else {
       resetForm();
@@ -415,244 +362,107 @@ const PassengerInfo = () => {
             <Button
               variant="outline"
               onClick={exportToCSV}
-              className="border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10"
+              className="border-slate-600 text-gray-300 hover:bg-slate-800"
             >
               <Download className="w-4 h-4 mr-2" />
-              Export CSV
+              Export
             </Button>
-          </div>
-        </div>
-
-        {/* Stats */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-slate-900 border border-yellow-500/20 rounded-xl p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-400 text-sm">Total Penumpang</p>
-                <p className="text-2xl font-bold text-white">
-                  {passengers.length}
-                </p>
-              </div>
-              <div className="w-10 h-10 rounded-full bg-yellow-500/10 flex items-center justify-center">
-                <Users className="w-5 h-5 text-yellow-400" />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-slate-900 border border-blue-500/20 rounded-xl p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-400 text-sm">Reguler</p>
-                <p className="text-2xl font-bold text-white">
-                  {passengers.filter((p) => p.serviceType === 'Reguler').length}
-                </p>
-              </div>
-              <div className="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center">
-                <FileText className="w-5 h-5 text-blue-400" />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-slate-900 border border-green-500/20 rounded-xl p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-400 text-sm">Dropping</p>
-                <p className="text-2xl font-bold text-white">
-                  {passengers.filter((p) => p.serviceType === 'Dropping').length}
-                </p>
-              </div>
-              <div className="w-10 h-10 rounded-full bg-green-500/10 flex items-center justify-center">
-                <MapPin className="w-5 h-5 text-green-400" />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-slate-900 border border-purple-500/20 rounded-xl p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-400 text-sm">Rental</p>
-                <p className="text-2xl font-bold text-white">
-                  {passengers.filter((p) => p.serviceType === 'Rental').length}
-                </p>
-              </div>
-              <div className="w-10 h-10 rounded-full bg-purple-500/10 flex items-center justify-center">
-                <Clock className="w-5 h-5 text-purple-400" />
-              </div>
-            </div>
           </div>
         </div>
 
         {/* Search */}
         <div className="relative">
-          <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-500 w-5 h-5" />
+          <Search className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
           <Input
-            placeholder="Cari nama, no HP, atau layanan..."
+            placeholder="Cari nama, no hp, atau layanan..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-12 bg-slate-900 border-yellow-500/20 text-white"
+            className="pl-10 bg-slate-800 border-slate-600 text-white placeholder:text-gray-400"
           />
         </div>
 
         {/* Table */}
-        <div className="bg-slate-900 border border-yellow-500/20 rounded-xl overflow-hidden">
+        <div className="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-slate-800">
                 <tr>
-                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
-                    Nama
-                  </th>
-                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
-                    No HP
-                  </th>
-                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
-                    Tanggal
-                  </th>
-                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
-                    Jam
-                  </th>
-                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
-                    Layanan
-                  </th>
-                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
-                    Total
-                  </th>
-                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
-                    Seat
-                  </th>
-                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
-                    E-Ticket
-                  </th>
-                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
-                    Action
-                  </th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Nama</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">No HP</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Tanggal</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Jam</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Pickup</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Dropoff</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Total</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Seat</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Layanan</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">E-Ticket</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Driver</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Kendaraan</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Aksi</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredPassengers.map((passenger, index) => {
-                  const effectiveETicket = computeEffectiveETicketValue(passenger);
+                {filteredPassengers.map((passenger) => (
+                  <tr key={passenger.id} className="border-t border-slate-700 hover:bg-slate-800/50">
+                    <td className="px-4 py-3 text-white font-medium">{passenger.passengerName}</td>
+                    <td className="px-4 py-3 text-gray-300">{passenger.passengerPhone}</td>
+                    <td className="px-4 py-3 text-gray-300">{passenger.date}</td>
+                    <td className="px-4 py-3 text-gray-300">{passenger.departureTime}</td>
+                    <td className="px-4 py-3 text-gray-300 max-w-xs truncate">{passenger.pickupAddress}</td>
+                    <td className="px-4 py-3 text-gray-300 max-w-xs truncate">{passenger.dropoffAddress}</td>
+                    <td className="px-4 py-3 text-gray-300">
+                      Rp {Number(passenger.totalAmount || 0).toLocaleString('id-ID')}
+                    </td>
+                    <td className="px-4 py-3 text-gray-300">{passenger.selectedSeats}</td>
+                    <td className="px-4 py-3 text-gray-300">{passenger.serviceType}</td>
 
-                  return (
-                    <tr
-                      key={passenger.id}
-                      className={`border-t border-slate-800 hover:bg-slate-800/50 transition-colors ${
-                        index % 2 === 0 ? 'bg-slate-900' : 'bg-slate-900/50'
-                      }`}
-                    >
-                      <td className="py-4 px-6">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-yellow-500/10 flex items-center justify-center">
-                            <Users className="w-5 h-5 text-yellow-400" />
-                          </div>
-                          <div>
-                            <p className="font-semibold text-white">
-                              {passenger.passengerName}
-                            </p>
-                            <p className="text-xs text-gray-400">
-                              {passenger.driverName || 'No Driver'}
-                            </p>
-                          </div>
-                        </div>
-                      </td>
+                    {/* E-Ticket column */}
+                    <td className="px-4 py-3">
+                      {passenger.eTicketPhoto ? (
+                        <button
+                          type="button"
+                          onClick={() => openETicket(passenger.eTicketPhoto, navigate)}
+                          className="inline-flex items-center gap-2 text-yellow-400 hover:text-yellow-300 underline text-sm"
+                          title="Buka E-Ticket / Invoice"
+                        >
+                          <FileText className="w-4 h-4" />
+                          DOC
+                        </button>
+                      ) : (
+                        <span className="text-gray-500 text-sm">-</span>
+                      )}
+                    </td>
 
-                      <td className="py-4 px-6">
-                        <div className="flex items-center gap-2 text-gray-300">
-                          <Phone className="w-4 h-4 text-gray-500" />
-                          {passenger.passengerPhone}
-                        </div>
-                      </td>
-
-                      <td className="py-4 px-6">
-                        <div className="flex items-center gap-2 text-gray-300">
-                          <Calendar className="w-4 h-4 text-gray-500" />
-                          {passenger.date}
-                        </div>
-                      </td>
-
-                      <td className="py-4 px-6">
-                        <div className="flex items-center gap-2 text-gray-300">
-                          <Clock className="w-4 h-4 text-gray-500" />
-                          {passenger.departureTime}
-                        </div>
-                      </td>
-
-                      <td className="py-4 px-6">
-                        <span className="px-3 py-1 rounded-full text-xs font-semibold bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">
-                          {passenger.serviceType}
-                        </span>
-                      </td>
-
-                      <td className="py-4 px-6 text-white font-semibold">
-                        Rp {passenger.totalAmount}
-                      </td>
-
-                      <td className="py-4 px-6">
-                        <span className="text-gray-300 text-sm">
-                          {String(passenger.selectedSeats || '')}
-                        </span>
-                      </td>
-
-                      {/* Foto / DOCS E-Ticket */}
-                      <td className="py-4 px-6">
-                        {effectiveETicket ? (
-                          <button
-                            type="button"
-                            onClick={() => openETicket(effectiveETicket)}
-                            className="inline-flex flex-col items-start gap-1"
-                          >
-                            {isBookingMarker(effectiveETicket) ? (
-                              <div className="w-16 h-16 rounded border border-slate-600 bg-slate-800 flex items-center justify-center text-[10px] text-yellow-400">
-                                DOCS
-                              </div>
-                            ) : (
-                              <img
-                                src={resolveToAbsoluteUrl(effectiveETicket)}
-                                alt="E-Ticket"
-                                className="w-16 h-16 object-cover rounded border border-slate-600"
-                              />
-                            )}
-                            <span className="text-[10px] text-yellow-400 underline">
-                              Open
-                            </span>
-                          </button>
-                        ) : (
-                          <span className="text-xs text-gray-500">
-                            No E-Ticket
-                          </span>
-                        )}
-                      </td>
-
-                      <td className="py-4 px-6">
-                        <div className="flex items-center gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleOpenModal(passenger)}
-                            className="border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10"
-                          >
-                            <Edit className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleOpenDeleteModal(passenger)}
-                            className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                    <td className="px-4 py-3 text-gray-300">{passenger.driverName}</td>
+                    <td className="px-4 py-3 text-gray-300">{passenger.vehicleCode}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleOpenModal(passenger)}
+                          className="border-slate-600 text-gray-300 hover:bg-slate-800"
+                        >
+                          <Edit className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleOpenDeleteModal(passenger)}
+                          className="border-red-500/40 text-red-300 hover:bg-red-500/10"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
 
                 {filteredPassengers.length === 0 && (
                   <tr>
-                    <td
-                      colSpan="9"
-                      className="py-12 text-center text-gray-500"
-                    >
-                      Tidak ada data penumpang ditemukan
+                    <td colSpan={13} className="px-4 py-10 text-center text-gray-400">
+                      Tidak ada data penumpang
                     </td>
                   </tr>
                 )}
@@ -661,7 +471,7 @@ const PassengerInfo = () => {
           </div>
         </div>
 
-        {/* Modal Form */}
+        {/* Form Modal */}
         <AnimatePresence>
           {isModalOpen && (
             <motion.div
@@ -675,261 +485,261 @@ const PassengerInfo = () => {
                 initial={{ scale: 0.9, opacity: 0, y: 20 }}
                 animate={{ scale: 1, opacity: 1, y: 0 }}
                 exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                className="bg-slate-900 border border-yellow-500/20 rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+                className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className="p-6 border-b border-slate-800 flex items-center justify-between">
-                  <h2 className="text-xl font-bold text-white">
-                    {currentPassenger ? 'Edit Penumpang' : 'Tambah Penumpang'}
-                  </h2>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleCloseModal}
-                    className="text-gray-400 hover:text-white"
-                  >
-                    <X className="w-5 h-5" />
-                  </Button>
-                </div>
+                <div className="p-6 space-y-6">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-xl font-bold text-white">
+                      {currentPassenger ? 'Edit Penumpang' : 'Tambah Penumpang'}
+                    </h2>
+                    <button
+                      onClick={handleCloseModal}
+                      className="text-gray-400 hover:text-white"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
 
-                <form onSubmit={handleSubmit} className="p-6 space-y-6">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {/* Passenger Name */}
-                    <div className="space-y-2">
-                      <Label htmlFor="passengerName" className="text-gray-300">
-                        Nama Penumpang
-                      </Label>
-                      <Input
-                        id="passengerName"
-                        name="passengerName"
-                        value={formData.passengerName}
-                        onChange={handleInputChange}
-                        className="bg-slate-800 border-slate-600 text-white"
-                        required
-                      />
-                    </div>
-
-                    {/* Passenger Phone */}
-                    <div className="space-y-2">
-                      <Label htmlFor="passengerPhone" className="text-gray-300">
-                        No HP
-                      </Label>
-                      <Input
-                        id="passengerPhone"
-                        name="passengerPhone"
-                        value={formData.passengerPhone}
-                        onChange={handleInputChange}
-                        className="bg-slate-800 border-slate-600 text-white"
-                        required
-                      />
-                    </div>
-
-                    {/* Date */}
-                    <div className="space-y-2">
-                      <Label htmlFor="date" className="text-gray-300">
-                        Tanggal
-                      </Label>
-                      <Input
-                        id="date"
-                        name="date"
-                        type="date"
-                        value={formData.date}
-                        onChange={handleInputChange}
-                        className="bg-slate-800 border-slate-600 text-white"
-                      />
-                    </div>
-
-                    {/* Departure Time */}
-                    <div className="space-y-2">
-                      <Label htmlFor="departureTime" className="text-gray-300">
-                        Jam Keberangkatan
-                      </Label>
-                      <Input
-                        id="departureTime"
-                        name="departureTime"
-                        type="time"
-                        value={formData.departureTime}
-                        onChange={handleInputChange}
-                        className="bg-slate-800 border-slate-600 text-white"
-                      />
-                    </div>
-
-                    {/* Pickup Address */}
-                    <div className="space-y-2 sm:col-span-2">
-                      <Label htmlFor="pickupAddress" className="text-gray-300">
-                        Alamat Pickup
-                      </Label>
-                      <Input
-                        id="pickupAddress"
-                        name="pickupAddress"
-                        value={formData.pickupAddress}
-                        onChange={handleInputChange}
-                        className="bg-slate-800 border-slate-600 text-white"
-                      />
-                    </div>
-
-                    {/* Dropoff Address */}
-                    <div className="space-y-2 sm:col-span-2">
-                      <Label htmlFor="dropoffAddress" className="text-gray-300">
-                        Alamat Dropoff
-                      </Label>
-                      <Input
-                        id="dropoffAddress"
-                        name="dropoffAddress"
-                        value={formData.dropoffAddress}
-                        onChange={handleInputChange}
-                        className="bg-slate-800 border-slate-600 text-white"
-                      />
-                    </div>
-
-                    {/* Total Amount */}
-                    <div className="space-y-2">
-                      <Label htmlFor="totalAmount" className="text-gray-300">
-                        Total Amount
-                      </Label>
-                      <Input
-                        id="totalAmount"
-                        name="totalAmount"
-                        value={formData.totalAmount}
-                        onChange={handleInputChange}
-                        className="bg-slate-800 border-slate-600 text-white"
-                      />
-                    </div>
-
-                    {/* Selected Seats */}
-                    <div className="space-y-2">
-                      <Label htmlFor="selectedSeats" className="text-gray-300">
-                        Selected Seats
-                      </Label>
-                      <Input
-                        id="selectedSeats"
-                        name="selectedSeats"
-                        value={formData.selectedSeats}
-                        onChange={handleInputChange}
-                        className="bg-slate-800 border-slate-600 text-white"
-                      />
-                    </div>
-
-                    {/* Service Type */}
-                    <div className="space-y-2">
-                      <Label htmlFor="serviceType" className="text-gray-300">
-                        Service Type
-                      </Label>
-                      <select
-                        id="serviceType"
-                        name="serviceType"
-                        value={formData.serviceType}
-                        onChange={handleInputChange}
-                        className="w-full h-10 px-3 rounded-md bg-slate-800 border border-slate-600 text-white"
-                      >
-                        <option value="Reguler">Reguler</option>
-                        <option value="Dropping">Dropping</option>
-                        <option value="Rental">Rental</option>
-                        <option value="Paket Barang">Paket Barang</option>
-                      </select>
-                    </div>
-
-                    {/* Driver Name */}
-                    <div className="space-y-2">
-                      <Label htmlFor="driverName" className="text-gray-300">
-                        Driver Name
-                      </Label>
-                      <Input
-                        id="driverName"
-                        name="driverName"
-                        value={formData.driverName}
-                        onChange={handleInputChange}
-                        className="bg-slate-800 border-slate-600 text-white"
-                      />
-                    </div>
-
-                    {/* Vehicle Code */}
-                    <div className="space-y-2">
-                      <Label htmlFor="vehicleCode" className="text-gray-300">
-                        Vehicle Code
-                      </Label>
-                      <Input
-                        id="vehicleCode"
-                        name="vehicleCode"
-                        value={formData.vehicleCode}
-                        onChange={handleInputChange}
-                        className="bg-slate-800 border-slate-600 text-white"
-                      />
-                    </div>
-
-                    {/* E-Ticket Photo */}
-                    <div className="space-y-2 sm:col-span-2">
-                      <Label htmlFor="eTicketPhoto" className="text-gray-300">
-                        E-Ticket Photo (URL/Base64/BOOKING:&lt;id&gt;)
-                      </Label>
-                      <div className="flex items-center gap-3">
+                  <form onSubmit={handleSubmit} className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* Passenger Name */}
+                      <div className="space-y-2">
+                        <Label htmlFor="passengerName" className="text-gray-300">
+                          Nama Penumpang
+                        </Label>
                         <Input
-                          id="eTicketPhoto"
-                          name="eTicketPhoto"
-                          value={formData.eTicketPhoto}
+                          id="passengerName"
+                          name="passengerName"
+                          value={formData.passengerName}
+                          onChange={handleInputChange}
+                          className="bg-slate-800 border-slate-600 text-white"
+                          required
+                        />
+                      </div>
+
+                      {/* Passenger Phone */}
+                      <div className="space-y-2">
+                        <Label htmlFor="passengerPhone" className="text-gray-300">
+                          No HP
+                        </Label>
+                        <Input
+                          id="passengerPhone"
+                          name="passengerPhone"
+                          value={formData.passengerPhone}
+                          onChange={handleInputChange}
+                          className="bg-slate-800 border-slate-600 text-white"
+                          required
+                        />
+                      </div>
+
+                      {/* Date */}
+                      <div className="space-y-2">
+                        <Label htmlFor="date" className="text-gray-300">
+                          Tanggal
+                        </Label>
+                        <Input
+                          id="date"
+                          name="date"
+                          type="date"
+                          value={formData.date}
                           onChange={handleInputChange}
                           className="bg-slate-800 border-slate-600 text-white"
                         />
-                        {formData.eTicketPhoto && (
-                          <button
-                            type="button"
-                            onClick={() => openETicket(formData.eTicketPhoto)}
-                            className="text-yellow-400 underline text-sm"
-                          >
-                            Preview
-                          </button>
-                        )}
-                        {formData.eTicketPhoto && (
-                          <div className="ml-2">
-                            {isBookingMarker(formData.eTicketPhoto) ? (
-                              <div className="w-12 h-12 rounded border border-slate-600 bg-slate-800 flex items-center justify-center text-[9px] text-yellow-400">
-                                DOCS
-                              </div>
-                            ) : (
-                              <img
-                                src={resolveToAbsoluteUrl(formData.eTicketPhoto)}
-                                alt="Preview E-Ticket"
-                                className="w-12 h-12 object-cover rounded border border-slate-600"
-                              />
-                            )}
-                          </div>
-                        )}
+                      </div>
+
+                      {/* Departure Time */}
+                      <div className="space-y-2">
+                        <Label htmlFor="departureTime" className="text-gray-300">
+                          Jam Berangkat
+                        </Label>
+                        <Input
+                          id="departureTime"
+                          name="departureTime"
+                          type="time"
+                          value={formData.departureTime}
+                          onChange={handleInputChange}
+                          className="bg-slate-800 border-slate-600 text-white"
+                        />
+                      </div>
+
+                      {/* Pickup Address */}
+                      <div className="space-y-2 sm:col-span-2">
+                        <Label htmlFor="pickupAddress" className="text-gray-300">
+                          Alamat Pickup
+                        </Label>
+                        <Input
+                          id="pickupAddress"
+                          name="pickupAddress"
+                          value={formData.pickupAddress}
+                          onChange={handleInputChange}
+                          className="bg-slate-800 border-slate-600 text-white"
+                        />
+                      </div>
+
+                      {/* Dropoff Address */}
+                      <div className="space-y-2 sm:col-span-2">
+                        <Label htmlFor="dropoffAddress" className="text-gray-300">
+                          Alamat Dropoff
+                        </Label>
+                        <Input
+                          id="dropoffAddress"
+                          name="dropoffAddress"
+                          value={formData.dropoffAddress}
+                          onChange={handleInputChange}
+                          className="bg-slate-800 border-slate-600 text-white"
+                        />
+                      </div>
+
+                      {/* Total Amount */}
+                      <div className="space-y-2">
+                        <Label htmlFor="totalAmount" className="text-gray-300">
+                          Total Amount
+                        </Label>
+                        <Input
+                          id="totalAmount"
+                          name="totalAmount"
+                          value={formData.totalAmount}
+                          onChange={handleInputChange}
+                          className="bg-slate-800 border-slate-600 text-white"
+                        />
+                      </div>
+
+                      {/* Selected Seats */}
+                      <div className="space-y-2">
+                        <Label htmlFor="selectedSeats" className="text-gray-300">
+                          Selected Seats
+                        </Label>
+                        <Input
+                          id="selectedSeats"
+                          name="selectedSeats"
+                          value={formData.selectedSeats}
+                          onChange={handleInputChange}
+                          className="bg-slate-800 border-slate-600 text-white"
+                        />
+                      </div>
+
+                      {/* Service Type */}
+                      <div className="space-y-2">
+                        <Label htmlFor="serviceType" className="text-gray-300">
+                          Service Type
+                        </Label>
+                        <select
+                          id="serviceType"
+                          name="serviceType"
+                          value={formData.serviceType}
+                          onChange={handleInputChange}
+                          className="w-full h-10 px-3 rounded-md bg-slate-800 border border-slate-600 text-white"
+                        >
+                          <option value="Reguler">Reguler</option>
+                          <option value="Dropping">Dropping</option>
+                          <option value="Rental">Rental</option>
+                          <option value="Paket Barang">Paket Barang</option>
+                        </select>
+                      </div>
+
+                      {/* Driver Name */}
+                      <div className="space-y-2">
+                        <Label htmlFor="driverName" className="text-gray-300">
+                          Driver Name
+                        </Label>
+                        <Input
+                          id="driverName"
+                          name="driverName"
+                          value={formData.driverName}
+                          onChange={handleInputChange}
+                          className="bg-slate-800 border-slate-600 text-white"
+                        />
+                      </div>
+
+                      {/* Vehicle Code */}
+                      <div className="space-y-2">
+                        <Label htmlFor="vehicleCode" className="text-gray-300">
+                          Vehicle Code
+                        </Label>
+                        <Input
+                          id="vehicleCode"
+                          name="vehicleCode"
+                          value={formData.vehicleCode}
+                          onChange={handleInputChange}
+                          className="bg-slate-800 border-slate-600 text-white"
+                        />
+                      </div>
+
+                      {/* E-Ticket Photo */}
+                      <div className="space-y-2 sm:col-span-2">
+                        <Label htmlFor="eTicketPhoto" className="text-gray-300">
+                          E-Ticket Photo (URL/Base64/BOOKING:&lt;id&gt;)
+                        </Label>
+                        <div className="flex items-center gap-3">
+                          <Input
+                            id="eTicketPhoto"
+                            name="eTicketPhoto"
+                            value={formData.eTicketPhoto}
+                            onChange={handleInputChange}
+                            className="bg-slate-800 border-slate-600 text-white"
+                          />
+                          {formData.eTicketPhoto && (
+                            <button
+                              type="button"
+                              onClick={() => openETicket(formData.eTicketPhoto, navigate)}
+                              className="text-yellow-400 underline text-sm"
+                            >
+                              Preview
+                            </button>
+                          )}
+                          {formData.eTicketPhoto && (
+                            <div className="ml-2">
+                              {isBookingMarker(formData.eTicketPhoto) ? (
+                                <div className="w-12 h-12 rounded border border-slate-600 bg-slate-800 flex items-center justify-center text-[9px] text-yellow-400">
+                                  DOCS
+                                </div>
+                              ) : (
+                                <img
+                                  src={resolveToAbsoluteUrl(formData.eTicketPhoto)}
+                                  alt="Preview E-Ticket"
+                                  className="w-12 h-12 object-cover rounded border border-slate-600"
+                                />
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  {/* Notes */}
-                  <div className="space-y-2">
-                    <Label htmlFor="notes" className="text-gray-300">
-                      Keterangan / Catatan
-                    </Label>
-                    <textarea
-                      id="notes"
-                      name="notes"
-                      value={formData.notes}
-                      onChange={handleInputChange}
-                      className="w-full min-h-[90px] px-3 py-2 rounded-md bg-slate-800 border border-slate-600 text-white"
-                    />
-                  </div>
+                    {/* Notes */}
+                    <div className="space-y-2">
+                      <Label htmlFor="notes" className="text-gray-300">
+                        Keterangan / Catatan
+                      </Label>
+                      <textarea
+                        id="notes"
+                        name="notes"
+                        value={formData.notes}
+                        onChange={handleInputChange}
+                        className="w-full min-h-[90px] px-3 py-2 rounded-md bg-slate-800 border border-slate-600 text-white"
+                      />
+                    </div>
 
-                  {/* Buttons */}
-                  <div className="flex items-center justify-end gap-3 pt-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={handleCloseModal}
-                      className="border-slate-600 text-gray-300 hover:bg-slate-800"
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      type="submit"
-                      className="bg-yellow-500 hover:bg-yellow-600 text-slate-900 font-bold"
-                    >
-                      {currentPassenger ? 'Update' : 'Create'}
-                    </Button>
-                  </div>
-                </form>
+                    {/* Buttons */}
+                    <div className="flex items-center justify-end gap-3 pt-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handleCloseModal}
+                        className="border-slate-600 text-gray-300 hover:bg-slate-800"
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="submit"
+                        className="bg-yellow-500 hover:bg-yellow-600 text-slate-900 font-bold"
+                      >
+                        {currentPassenger ? 'Update' : 'Create'}
+                      </Button>
+                    </div>
+                  </form>
+                </div>
               </motion.div>
             </motion.div>
           )}
