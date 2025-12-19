@@ -1,44 +1,146 @@
 import React, { useState, useEffect } from 'react';
 import { Helmet } from 'react-helmet';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
+  Search,
+  Plus,
+  Edit,
+  Trash2,
+  Download,
+  Eye,
   Users,
   Phone,
-  MapPin,
   Calendar,
-  Plus,
-  Armchair,
-  Banknote,
   Clock,
+  MapPin,
+  FileText,
+  X,
 } from 'lucide-react';
-import DashboardLayout from '@/components/DashboardLayout';
-import CrudActions from '@/components/CrudActions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 
-const ITEMS_PER_PAGE = 10;
-const API_BASE = 'http://localhost:8080/api';
-const PASSENGER_API = `${API_BASE}/passengers`;
+// ==============================
+// Helpers: handle E-Ticket value
+// - bisa berupa dataURL/base64
+// - bisa berupa URL absolut
+// - bisa berupa URL relatif (mis. /uploads/.. atau /api/..)
+// - bisa berupa marker: "BOOKING:<id>" (dokumen ada di halaman booking)
+// ==============================
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+const BOOKING_PAGE_PATH = import.meta.env.VITE_BOOKING_PAGE_PATH || '/reguler';
+
+function isBookingMarker(v) {
+  return typeof v === 'string' && v.startsWith('BOOKING:');
+}
+
+function parseBookingId(marker) {
+  if (!isBookingMarker(marker)) return null;
+  const idStr = marker.slice('BOOKING:'.length).trim();
+  const id = Number(idStr);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+function resolveToAbsoluteUrl(v) {
+  if (!v || typeof v !== 'string') return v;
+
+  // sudah data URL / base64
+  if (v.startsWith('data:')) return v;
+
+  // sudah absolut
+  if (v.startsWith('http://') || v.startsWith('https://')) return v;
+
+  // marker booking -> tidak bisa jadi src img
+  if (isBookingMarker(v)) return '';
+
+  // relatif: gabung dengan API_BASE
+  if (v.startsWith('/')) return `${API_BASE}${v}`;
+
+  return v;
+}
+
+function openETicket(v) {
+  if (!v) return;
+
+  // marker: buka halaman booking agar user bisa lihat invoice/e-ticket
+  const bookingId = parseBookingId(v);
+  if (bookingId) {
+    const url = `${BOOKING_PAGE_PATH}?bookingId=${bookingId}`;
+    window.open(url, '_blank');
+    return;
+  }
+
+  const url = resolveToAbsoluteUrl(v);
+  if (url) window.open(url, '_blank');
+}
+
+// ==============================
+// ✅ Tambahan helpers: ambil bookingId dari hint/notes
+// ==============================
+function parseBookingIdFromInvoiceHint(hint) {
+  if (!hint || typeof hint !== 'string') return null;
+
+  // contoh: "ETICKET_INVOICE_FROM_BOOKING:123"
+  const idx = hint.lastIndexOf(':');
+  if (idx < 0) return null;
+  const idStr = hint.slice(idx + 1).trim();
+  const id = Number(idStr);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+function tryParseLastJsonFromNotes(notes) {
+  if (!notes || typeof notes !== 'string') return null;
+
+  // biasanya sync nempel JSON di akhir notes (baris terakhir)
+  // cari '{' terakhir, coba parse dari situ.
+  const lastBrace = notes.lastIndexOf('{');
+  if (lastBrace < 0) return null;
+
+  const candidate = notes.slice(lastBrace).trim();
+  if (!candidate.startsWith('{') || !candidate.endsWith('}')) return null;
+
+  try {
+    const obj = JSON.parse(candidate);
+    return obj && typeof obj === 'object' ? obj : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function computeEffectiveETicketValue(passenger) {
+  // 1) kalau sudah ada eTicketPhoto, pakai itu
+  if (passenger?.eTicketPhoto) return passenger.eTicketPhoto;
+
+  // 2) coba dari field backend baru (jika ada)
+  const hint = passenger?.eTicketInvoiceHint;
+  const bidFromHint = parseBookingIdFromInvoiceHint(hint);
+  if (bidFromHint) return `BOOKING:${bidFromHint}`;
+
+  // 3) coba dari notes JSON sync (bookingId)
+  const syncObj = tryParseLastJsonFromNotes(passenger?.notes);
+  const bidFromNotes = syncObj?.bookingId ? Number(syncObj.bookingId) : null;
+  if (Number.isFinite(bidFromNotes) && bidFromNotes > 0) {
+    return `BOOKING:${bidFromNotes}`;
+  }
+
+  // 4) jika backend mengirim bookingId langsung
+  const bidDirect = passenger?.bookingId ? Number(passenger.bookingId) : null;
+  if (Number.isFinite(bidDirect) && bidDirect > 0) {
+    return `BOOKING:${bidDirect}`;
+  }
+
+  return '';
+}
+
+import DashboardLayout from '@/components/DashboardLayout';
 
 const PassengerInfo = () => {
   const { toast } = useToast();
   const [passengers, setPassengers] = useState([]);
-
-  // Loading / Saving state
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  // Modal State
+  const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [currentPassenger, setCurrentPassenger] = useState(null);
   const [formData, setFormData] = useState({
     passengerName: '',
@@ -49,63 +151,49 @@ const PassengerInfo = () => {
     dropoffAddress: '',
     totalAmount: '',
     selectedSeats: '',
+    serviceType: 'Reguler',
+    eTicketPhoto: '',
     driverName: '',
     vehicleCode: '',
-    serviceType: 'Reguler', // 🔹 Jenis layanan default
-    eTicketPhoto: '',       // 🔹 Foto E-Ticket (base64)
     notes: '',
+
+    // ✅ Tambahan fields (tidak mengganggu, untuk kompatibilitas data baru backend)
+    bookingId: '',
+    eTicketInvoiceHint: '',
+    bookingHint: '',
+    suratJalanApi: '',
   });
 
-  // Filter & Pagination state
-  const [searchInput, setSearchInput] = useState('');
-  const [searchText, setSearchText] = useState('');
-  const [filterName, setFilterName] = useState('');
-  const [filterPhone, setFilterPhone] = useState('');
-  const [filterYear, setFilterYear] = useState('all');
-  const [currentPage, setCurrentPage] = useState(1);
-
-  // 🔹 Load dari backend
+  // Fetch passengers data
   useEffect(() => {
-    const fetchPassengers = async () => {
-      try {
-        setLoading(true);
-        const res = await fetch(PASSENGER_API);
-        if (!res.ok) throw new Error('Gagal mengambil data penumpang');
-        const data = await res.json();
-        setPassengers(data || []);
-      } catch (err) {
-        console.error(err);
-        toast({
-          title: 'Error',
-          description: err.message || 'Gagal memuat data penumpang',
-          variant: 'destructive',
-        });
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchPassengers();
-  }, [toast]);
+  }, []);
 
-  const reloadPassengers = async () => {
+  const fetchPassengers = async () => {
     try {
-      const res = await fetch(PASSENGER_API);
-      if (!res.ok) throw new Error('Gagal mengambil data penumpang');
-      const data = await res.json();
-      setPassengers(data || []);
-    } catch (err) {
-      console.error(err);
+      const response = await fetch('http://localhost:8080/api/passengers');
+      if (!response.ok) {
+        throw new Error('Failed to fetch passengers');
+      }
+      const data = await response.json();
+      setPassengers(data);
+    } catch (error) {
+      console.error('Error fetching passengers:', error);
       toast({
         title: 'Error',
-        description: err.message || 'Gagal memuat ulang data penumpang',
+        description: 'Gagal memuat data penumpang',
         variant: 'destructive',
       });
     }
   };
 
-  const openCreateModal = () => {
-    setCurrentPassenger(null);
+  const filteredPassengers = passengers.filter((passenger) =>
+    passenger.passengerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    passenger.passengerPhone.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    passenger.serviceType.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const resetForm = () => {
     setFormData({
       passengerName: '',
       passengerPhone: '',
@@ -115,59 +203,64 @@ const PassengerInfo = () => {
       dropoffAddress: '',
       totalAmount: '',
       selectedSeats: '',
-      driverName: '',
-      vehicleCode: '',
       serviceType: 'Reguler',
       eTicketPhoto: '',
+      driverName: '',
+      vehicleCode: '',
       notes: '',
+
+      // ✅ Tambahan fields (tidak mengganggu)
+      bookingId: '',
+      eTicketInvoiceHint: '',
+      bookingHint: '',
+      suratJalanApi: '',
     });
-    setIsModalOpen(true);
+    setCurrentPassenger(null);
   };
 
-  const openEditModal = (passenger) => {
-    const existingDate =
-      passenger.date ||
-      (passenger.createdAt ? passenger.createdAt.slice(0, 10) : '');
+  const handleOpenModal = (passenger = null) => {
+    if (passenger) {
+      setCurrentPassenger(passenger);
+      setFormData({
+        passengerName: passenger.passengerName || '',
+        passengerPhone: passenger.passengerPhone || '',
+        date: passenger.date || '',
+        departureTime: passenger.departureTime || '',
+        pickupAddress: passenger.pickupAddress || '',
+        dropoffAddress: passenger.dropoffAddress || '',
+        totalAmount: passenger.totalAmount || '',
+        selectedSeats: passenger.selectedSeats || '',
+        serviceType: passenger.serviceType || 'Reguler',
+        eTicketPhoto: passenger.eTicketPhoto || '',
+        driverName: passenger.driverName || '',
+        vehicleCode: passenger.vehicleCode || '',
+        notes: passenger.notes || '',
 
-    setCurrentPassenger(passenger);
-    setFormData({
-      passengerName: passenger.passengerName || '',
-      passengerPhone: passenger.passengerPhone || '',
-      date: existingDate || '',
-      departureTime: passenger.departureTime || '',
-      pickupAddress: passenger.pickupAddress || passenger.from || '',
-      dropoffAddress: passenger.dropoffAddress || passenger.to || '',
-      totalAmount: passenger.totalAmount || '',
-      selectedSeats: Array.isArray(passenger.selectedSeats)
-        ? passenger.selectedSeats.join(', ')
-        : passenger.selectedSeats || '',
-      driverName: passenger.driverName || '',
-      vehicleCode: passenger.vehicleCode || '',
-      serviceType: passenger.serviceType || 'Reguler',
-      eTicketPhoto: passenger.eTicketPhoto || '',
-      notes: passenger.notes || '',
-    });
-    setIsModalOpen(true);
-  };
-
-  const handleDelete = async (id) => {
-    try {
-      const res = await fetch(`${PASSENGER_API}/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Gagal menghapus data penumpang');
-      setPassengers((prev) => prev.filter((p) => p.id !== id));
-      toast({
-        title: 'Deleted',
-        description: 'Passenger record removed.',
-        variant: 'destructive',
+        // ✅ Tambahan fields (kalau backend mengirim)
+        bookingId: passenger.bookingId || '',
+        eTicketInvoiceHint: passenger.eTicketInvoiceHint || '',
+        bookingHint: passenger.bookingHint || '',
+        suratJalanApi: passenger.suratJalanApi || '',
       });
-    } catch (err) {
-      console.error(err);
-      toast({
-        title: 'Error',
-        description: err.message || 'Gagal menghapus passenger',
-        variant: 'destructive',
-      });
+    } else {
+      resetForm();
     }
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    resetForm();
+  };
+
+  const handleOpenDeleteModal = (passenger) => {
+    setCurrentPassenger(passenger);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleCloseDeleteModal = () => {
+    setIsDeleteModalOpen(false);
+    setCurrentPassenger(null);
   };
 
   const handleInputChange = (e) => {
@@ -175,756 +268,722 @@ const PassengerInfo = () => {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  // 🔹 Upload Foto E-Ticket (base64)
-  const handleETicketChange = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64 = reader.result; // data:image/...;base64,...
-      setFormData((prev) => ({
-        ...prev,
-        eTicketPhoto: base64,
-      }));
-    };
-    reader.readAsDataURL(file);
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    const seats = formData.selectedSeats
-      ? formData.selectedSeats
-          .split(',')
-          .map((s) => s.trim())
-          .filter((s) => s)
-      : [];
-
-    const payload = {
-      ...formData,
-      selectedSeats: seats,
-      from: formData.pickupAddress,
-      to: formData.dropoffAddress,
-    };
-
-    setSaving(true);
     try {
-      if (currentPassenger) {
-        // UPDATE
-        const res = await fetch(`${PASSENGER_API}/${currentPassenger.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) throw new Error('Gagal mengupdate data penumpang');
-        toast({
-          title: 'Updated',
-          description: 'Passenger details updated.',
-        });
-      } else {
-        // CREATE
-        const res = await fetch(PASSENGER_API, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) throw new Error('Gagal membuat penumpang baru');
-        const created = await res.json();
-        setPassengers((prev) => [created, ...prev]);
-        toast({
-          title: 'Created',
-          description: 'New passenger added.',
-        });
+      const url = currentPassenger
+        ? `http://localhost:8080/api/passengers/${currentPassenger.id}`
+        : 'http://localhost:8080/api/passengers';
+      const method = currentPassenger ? 'PUT' : 'POST';
+
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save passenger');
       }
 
-      await reloadPassengers();
-      setIsModalOpen(false);
-      setCurrentPassenger(null);
-    } catch (err) {
-      console.error(err);
+      toast({
+        title: 'Success',
+        description: currentPassenger
+          ? 'Data penumpang berhasil diperbarui'
+          : 'Data penumpang berhasil ditambahkan',
+      });
+
+      handleCloseModal();
+      fetchPassengers();
+    } catch (error) {
+      console.error('Error saving passenger:', error);
       toast({
         title: 'Error',
-        description: err.message || 'Gagal menyimpan data penumpang',
+        description: 'Gagal menyimpan data penumpang',
         variant: 'destructive',
       });
-    } finally {
-      setSaving(false);
     }
   };
 
-  // Tahun filter
-  const yearOptions = ['2025', '2026', '2027', '2028', '2029', '2030'];
+  const handleDelete = async () => {
+    if (!currentPassenger) return;
 
-  // Filtering
-  const filteredPassengers = passengers.filter((p) => {
-    const name = (p.passengerName || '').toLowerCase();
-    const phone = (p.passengerPhone || '').toLowerCase();
-    const pickup = (p.pickupAddress || p.from || '').toLowerCase();
-    const drop = (p.dropoffAddress || p.to || '').toLowerCase();
-    const driver = (p.driverName || '').toLowerCase();
-    const vehicle = (p.vehicleCode || '').toLowerCase();
-    const serviceType = (p.serviceType || '').toLowerCase();
-    const dateStr = p.date || (p.createdAt ? p.createdAt.slice(0, 10) : '');
-    const year = dateStr ? dateStr.slice(0, 4) : '';
+    try {
+      const response = await fetch(
+        `http://localhost:8080/api/passengers/${currentPassenger.id}`,
+        { method: 'DELETE' }
+      );
 
-    if (filterYear !== 'all' && year !== filterYear) return false;
-    if (filterName && !name.includes(filterName.toLowerCase())) return false;
-    if (filterPhone && !phone.includes(filterPhone.toLowerCase())) return false;
-
-    if (searchText) {
-      const q = searchText.toLowerCase();
-      if (
-        !name.includes(q) &&
-        !phone.includes(q) &&
-        !pickup.includes(q) &&
-        !drop.includes(q) &&
-        !driver.includes(q) &&
-        !vehicle.includes(q) &&
-        !serviceType.includes(q)
-      ) {
-        return false;
+      if (!response.ok) {
+        throw new Error('Failed to delete passenger');
       }
+
+      toast({
+        title: 'Success',
+        description: 'Data penumpang berhasil dihapus',
+      });
+
+      handleCloseDeleteModal();
+      fetchPassengers();
+    } catch (error) {
+      console.error('Error deleting passenger:', error);
+      toast({
+        title: 'Error',
+        description: 'Gagal menghapus data penumpang',
+        variant: 'destructive',
+      });
     }
+  };
 
-    return true;
-  });
+  const exportToCSV = () => {
+    const headers = [
+      'Nama',
+      'No HP',
+      'Tanggal',
+      'Jam',
+      'Pickup',
+      'Dropoff',
+      'Total',
+      'Seat',
+      'Layanan',
+      'Driver',
+      'Kendaraan',
+      'Catatan',
+    ];
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchText, filterName, filterPhone, filterYear, passengers.length]);
+    const csvData = filteredPassengers.map((p) => [
+      p.passengerName,
+      p.passengerPhone,
+      p.date,
+      p.departureTime,
+      p.pickupAddress,
+      p.dropoffAddress,
+      p.totalAmount,
+      p.selectedSeats,
+      p.serviceType,
+      p.driverName,
+      p.vehicleCode,
+      p.notes,
+    ]);
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(filteredPassengers.length / ITEMS_PER_PAGE),
-  );
-  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-  const currentPagePassengers = filteredPassengers.slice(
-    startIndex,
-    startIndex + ITEMS_PER_PAGE,
-  );
+    const csvContent =
+      [headers, ...csvData]
+        .map((row) =>
+          row
+            .map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`)
+            .join(',')
+        )
+        .join('\n');
 
-  const handleSearchClick = () => {
-    setSearchText(searchInput.trim());
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `passengers_${new Date().toISOString()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   return (
     <DashboardLayout>
       <Helmet>
-        <title>Passenger Info - LK Travel App</title>
-        <meta name="description" content="View passenger information" />
+        <title>Data Penumpang - Travel App</title>
       </Helmet>
 
-      <div className="space-y-6">
+      <div className="p-6 space-y-6">
         {/* Header */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold text-yellow-400 mb-2">
-              Passenger Information
-            </h1>
-            <p className="text-gray-400">
-              Manage passenger details, pickups, and fares.
+            <h1 className="text-2xl font-bold text-white">Data Penumpang</h1>
+            <p className="text-gray-400 text-sm">
+              Kelola data penumpang dan informasi perjalanan
             </p>
           </div>
-          <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+
+          <div className="flex items-center gap-2">
             <Button
-              onClick={openCreateModal}
-              className="bg-gradient-to-r from-emerald-500 to-emerald-700 hover:from-emerald-600 hover:to-emerald-800 text-white font-bold shadow-lg shadow-emerald-900/20 border-0"
+              onClick={() => handleOpenModal()}
+              className="bg-yellow-500 hover:bg-yellow-600 text-slate-900 font-bold"
             >
-              <Plus className="w-5 h-5 mr-2" />
-              Add Passenger
+              <Plus className="w-4 h-4 mr-2" />
+              Tambah Penumpang
             </Button>
-          </motion.div>
-        </div>
 
-        {/* Search & Filter */}
-        <div className="bg-slate-800/60 border border-gray-700 rounded-xl p-4 flex flex-col md:flex-row gap-4 md:items-end">
-          <div className="flex-1 space-y-1">
-            <Label htmlFor="searchText">
-              Search (Nama / No HP / Alamat / Driver / Kode Kendaraan / Jenis Layanan)
-            </Label>
-            <div className="flex gap-2">
-              <Input
-                id="searchText"
-                placeholder="Ketik kata kunci..."
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleSearchClick();
-                }}
-                className="bg-slate-900 border-slate-700"
-              />
-              <Button
-                type="button"
-                onClick={handleSearchClick}
-                className="bg-yellow-500 hover:bg-yellow-600 text-slate-900 font-bold"
-              >
-                Search
-              </Button>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:w-[520px]">
-            <div className="space-y-1">
-              <Label htmlFor="filterName">Filter Nama</Label>
-              <Input
-                id="filterName"
-                placeholder="Nama penumpang"
-                value={filterName}
-                onChange={(e) => setFilterName(e.target.value)}
-                className="bg-slate-900 border-slate-700"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="filterPhone">Filter No HP</Label>
-              <Input
-                id="filterPhone"
-                placeholder="No HP"
-                value={filterPhone}
-                onChange={(e) => setFilterPhone(e.target.value)}
-                className="bg-slate-900 border-slate-700"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="filterYear">Tahun Keberangkatan</Label>
-              <select
-                id="filterYear"
-                value={filterYear}
-                onChange={(e) => setFilterYear(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-yellow-500"
-              >
-                <option value="all">Semua Tahun</option>
-                {yearOptions.map((y) => (
-                  <option key={y} value={y}>
-                    {y}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <Button
+              variant="outline"
+              onClick={exportToCSV}
+              className="border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10"
+            >
+              <Download className="w-4 h-4 mr-2" />
+              Export CSV
+            </Button>
           </div>
         </div>
 
-        {/* TABLE */}
-        <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-gray-700 shadow-xl overflow-hidden">
+        {/* Stats */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-slate-900 border border-yellow-500/20 rounded-xl p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-gray-400 text-sm">Total Penumpang</p>
+                <p className="text-2xl font-bold text-white">
+                  {passengers.length}
+                </p>
+              </div>
+              <div className="w-10 h-10 rounded-full bg-yellow-500/10 flex items-center justify-center">
+                <Users className="w-5 h-5 text-yellow-400" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-900 border border-blue-500/20 rounded-xl p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-gray-400 text-sm">Reguler</p>
+                <p className="text-2xl font-bold text-white">
+                  {passengers.filter((p) => p.serviceType === 'Reguler').length}
+                </p>
+              </div>
+              <div className="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center">
+                <FileText className="w-5 h-5 text-blue-400" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-900 border border-green-500/20 rounded-xl p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-gray-400 text-sm">Dropping</p>
+                <p className="text-2xl font-bold text-white">
+                  {passengers.filter((p) => p.serviceType === 'Dropping').length}
+                </p>
+              </div>
+              <div className="w-10 h-10 rounded-full bg-green-500/10 flex items-center justify-center">
+                <MapPin className="w-5 h-5 text-green-400" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-900 border border-purple-500/20 rounded-xl p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-gray-400 text-sm">Rental</p>
+                <p className="text-2xl font-bold text-white">
+                  {passengers.filter((p) => p.serviceType === 'Rental').length}
+                </p>
+              </div>
+              <div className="w-10 h-10 rounded-full bg-purple-500/10 flex items-center justify-center">
+                <Clock className="w-5 h-5 text-purple-400" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Search */}
+        <div className="relative">
+          <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-500 w-5 h-5" />
+          <Input
+            placeholder="Cari nama, no HP, atau layanan..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="pl-12 bg-slate-900 border-yellow-500/20 text-white"
+          />
+        </div>
+
+        {/* Table */}
+        <div className="bg-slate-900 border border-yellow-500/20 rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-slate-900/50">
+              <thead className="bg-slate-800">
                 <tr>
-                  <th className="text-left py-4 px-6 text-gray-400 font-medium text-xs uppercase tracking-wider">
-                    Nama Penumpang
+                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
+                    Nama
                   </th>
-                  <th className="text-left py-4 px-6 text-gray-400 font-medium text-xs uppercase tracking-wider">
+                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
                     No HP
                   </th>
-                  <th className="text-left py-4 px-6 text-gray-400 font-medium text-xs uppercase tracking-wider">
-                    Tanggal Keberangkatan
+                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
+                    Tanggal
                   </th>
-                  <th className="text-left py-4 px-6 text-gray-400 font-medium text-xs uppercase tracking-wider">
-                    Jam Keberangkatan
+                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
+                    Jam
                   </th>
-                  <th className="text-left py-4 px-6 text-gray-400 font-medium text-xs uppercase tracking-wider">
-                    Alamat Penjemputan
+                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
+                    Layanan
                   </th>
-                  <th className="text-left py-4 px-6 text-gray-400 font-medium text-xs uppercase tracking-wider">
-                    Alamat Pengantaran
+                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
+                    Total
                   </th>
-                  <th className="text-left py-4 px-6 text-gray-400 font-medium text-xs uppercase tracking-wider">
-                    Info (Tarif / Seat)
+                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
+                    Seat
                   </th>
-                  <th className="text-left py-4 px-6 text-gray-400 font-medium text-xs uppercase tracking-wider">
-                    Jenis Layanan
+                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
+                    E-Ticket
                   </th>
-                  <th className="text-left py-4 px-6 text-gray-400 font-medium text-xs uppercase tracking-wider">
-                    Foto E-Ticket
-                  </th>
-                  <th className="text-left py-4 px-6 text-gray-400 font-medium text-xs uppercase tracking-wider">
-                    Driver Info
-                  </th>
-                  <th className="text-left py-4 px-6 text-gray-400 font-medium text-xs uppercase tracking-wider">
-                    Vehicle Code
-                  </th>
-                  <th className="text-left py-4 px-6 text-gray-400 font-medium text-xs uppercase tracking-wider">
-                    Keterangan
-                  </th>
-                  <th className="text-right py-4 px-6 text-gray-400 font-medium text-xs uppercase tracking-wider">
-                    Actions
+                  <th className="text-left py-4 px-6 text-yellow-400 font-semibold">
+                    Action
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-800">
-                {loading ? (
-                  <tr>
-                    <td
-                      colSpan={13}
-                      className="py-8 text-center text-gray-500 text-sm"
-                    >
-                      Loading passengers...
-                    </td>
-                  </tr>
-                ) : currentPagePassengers.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={13}
-                      className="py-8 text-center text-gray-500 text-sm"
-                    >
-                      No passenger records found
-                    </td>
-                  </tr>
-                ) : (
-                  currentPagePassengers.map((passenger) => {
-                    const departureDate =
-                      passenger.date ||
-                      (passenger.createdAt
-                        ? passenger.createdAt.slice(0, 10)
-                        : '-');
+              <tbody>
+                {filteredPassengers.map((passenger, index) => {
+                  const effectiveETicket = computeEffectiveETicketValue(passenger);
 
-                    const departureTime = passenger.departureTime || '';
-                    const pickupText =
-                      passenger.pickupAddress || passenger.from || '-';
-                    const dropoffText =
-                      passenger.dropoffAddress || passenger.to || '-';
+                  return (
+                    <tr
+                      key={passenger.id}
+                      className={`border-t border-slate-800 hover:bg-slate-800/50 transition-colors ${
+                        index % 2 === 0 ? 'bg-slate-900' : 'bg-slate-900/50'
+                      }`}
+                    >
+                      <td className="py-4 px-6">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-yellow-500/10 flex items-center justify-center">
+                            <Users className="w-5 h-5 text-yellow-400" />
+                          </div>
+                          <div>
+                            <p className="font-semibold text-white">
+                              {passenger.passengerName}
+                            </p>
+                            <p className="text-xs text-gray-400">
+                              {passenger.driverName || 'No Driver'}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
 
-                    return (
-                      <motion.tr
-                        key={passenger.id}
-                        initial={{ opacity: 0, x: -20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        className="group hover:bg-slate-700/30 transition-colors"
-                      >
-                        {/* Nama */}
-                        <td className="py-4 px-6">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-yellow-500 font-bold border border-white/5">
-                              {passenger.passengerName
-                                ? passenger.passengerName.charAt(0)
-                                : 'U'}
-                            </div>
-                            <div>
-                              <div className="text-white font-bold">
-                                {passenger.passengerName || '-'}
+                      <td className="py-4 px-6">
+                        <div className="flex items-center gap-2 text-gray-300">
+                          <Phone className="w-4 h-4 text-gray-500" />
+                          {passenger.passengerPhone}
+                        </div>
+                      </td>
+
+                      <td className="py-4 px-6">
+                        <div className="flex items-center gap-2 text-gray-300">
+                          <Calendar className="w-4 h-4 text-gray-500" />
+                          {passenger.date}
+                        </div>
+                      </td>
+
+                      <td className="py-4 px-6">
+                        <div className="flex items-center gap-2 text-gray-300">
+                          <Clock className="w-4 h-4 text-gray-500" />
+                          {passenger.departureTime}
+                        </div>
+                      </td>
+
+                      <td className="py-4 px-6">
+                        <span className="px-3 py-1 rounded-full text-xs font-semibold bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">
+                          {passenger.serviceType}
+                        </span>
+                      </td>
+
+                      <td className="py-4 px-6 text-white font-semibold">
+                        Rp {passenger.totalAmount}
+                      </td>
+
+                      <td className="py-4 px-6">
+                        <span className="text-gray-300 text-sm">
+                          {String(passenger.selectedSeats || '')}
+                        </span>
+                      </td>
+
+                      {/* Foto / DOCS E-Ticket */}
+                      <td className="py-4 px-6">
+                        {effectiveETicket ? (
+                          <button
+                            type="button"
+                            onClick={() => openETicket(effectiveETicket)}
+                            className="inline-flex flex-col items-start gap-1"
+                          >
+                            {isBookingMarker(effectiveETicket) ? (
+                              <div className="w-16 h-16 rounded border border-slate-600 bg-slate-800 flex items-center justify-center text-[10px] text-yellow-400">
+                                DOCS
                               </div>
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* No HP */}
-                        <td className="py-4 px-6">
-                          <div className="flex items-center gap-2 text-gray-300 text-sm">
-                            <Phone className="w-3 h-3 text-green-400" />
-                            <span className="font-mono">
-                              {passenger.passengerPhone || '-'}
-                            </span>
-                          </div>
-                        </td>
-
-                        {/* Tanggal */}
-                        <td className="py-4 px-6">
-                          <div className="flex items-center gap-2 text-gray-300 text-sm">
-                            <Calendar className="w-3 h-3 text-blue-400" />
-                            <span>{departureDate || '-'}</span>
-                          </div>
-                        </td>
-
-                        {/* Jam */}
-                        <td className="py-4 px-6">
-                          <div className="flex items-center gap-2 text-gray-300 text-sm">
-                            <Clock className="w-3 h-3 text-purple-400" />
-                            <span>{departureTime || '-'}</span>
-                          </div>
-                        </td>
-
-                        {/* Pickup */}
-                        <td className="py-4 px-6">
-                          <div
-                            className="text-sm text-gray-300 max-w-[220px] truncate"
-                            title={pickupText}
-                          >
-                            <MapPin className="w-3 h-3 inline text-red-400 mr-1" />
-                            {pickupText}
-                          </div>
-                        </td>
-
-                        {/* Dropoff */}
-                        <td className="py-4 px-6">
-                          <div
-                            className="text-sm text-gray-300 max-w-[220px] truncate"
-                            title={dropoffText}
-                          >
-                            <MapPin className="w-3 h-3 inline text-blue-400 mr-1" />
-                            {dropoffText}
-                          </div>
-                        </td>
-
-                        {/* Tarif & Seat */}
-                        <td className="py-4 px-6">
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2 text-xs text-yellow-400 font-bold">
-                              <Banknote className="w-3 h-3" />
-                              <span>
-                                Rp{' '}
-                                {parseInt(
-                                  passenger.totalAmount || 0,
-                                  10,
-                                ).toLocaleString()}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2 text-xs text-gray-400">
-                              <Armchair className="w-3 h-3" />
-                              <span>
-                                {Array.isArray(passenger.selectedSeats)
-                                  ? passenger.selectedSeats.join(', ')
-                                  : passenger.selectedSeats || '-'}
-                              </span>
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* Jenis Layanan */}
-                        <td className="py-4 px-6">
-                          <span className="text-xs font-semibold px-2 py-1 rounded-full bg-slate-900 border border-slate-700 text-gray-200">
-                            {passenger.serviceType || '-'}
-                          </span>
-                        </td>
-
-                        {/* Foto E-Ticket */}
-                        <td className="py-4 px-6">
-                          {passenger.eTicketPhoto ? (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                window.open(passenger.eTicketPhoto, '_blank')
-                              }
-                              className="inline-flex flex-col items-start gap-1"
-                            >
+                            ) : (
                               <img
-                                src={passenger.eTicketPhoto}
+                                src={resolveToAbsoluteUrl(effectiveETicket)}
                                 alt="E-Ticket"
                                 className="w-16 h-16 object-cover rounded border border-slate-600"
                               />
-                              <span className="text-[10px] text-yellow-400 underline">
-                                Open
-                              </span>
-                            </button>
-                          ) : (
-                            <span className="text-xs text-gray-500">
-                              No E-Ticket
+                            )}
+                            <span className="text-[10px] text-yellow-400 underline">
+                              Open
                             </span>
-                          )}
-                        </td>
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-500">
+                            No E-Ticket
+                          </span>
+                        )}
+                      </td>
 
-                        {/* Driver */}
-                        <td className="py-4 px-6">
-                          <div className="text-sm text-gray-300 max-w-[160px] truncate">
-                            {passenger.driverName || '-'}
-                          </div>
-                        </td>
+                      <td className="py-4 px-6">
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleOpenModal(passenger)}
+                            className="border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleOpenDeleteModal(passenger)}
+                            className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
 
-                        {/* Vehicle Code */}
-                        <td className="py-4 px-6">
-                          <div className="text-sm text-gray-200 font-mono">
-                            {passenger.vehicleCode || '-'}
-                          </div>
-                        </td>
-
-                        {/* Notes */}
-                        <td className="py-4 px-6">
-                          <div className="text-xs text-gray-400 italic max-w-[180px] truncate">
-                            {passenger.notes || 'No notes'}
-                          </div>
-                        </td>
-
-                        {/* Actions */}
-                        <td className="py-4 px-6 text-right">
-                          <CrudActions
-                            itemName="Passenger"
-                            onView={() =>
-                              toast({
-                                title: 'Details',
-                                description: `Viewing details for ${passenger.passengerName}`,
-                              })
-                            }
-                            onEdit={() => openEditModal(passenger)}
-                            onDelete={() => handleDelete(passenger.id)}
-                          />
-                        </td>
-                      </motion.tr>
-                    );
-                  })
+                {filteredPassengers.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan="9"
+                      className="py-12 text-center text-gray-500"
+                    >
+                      Tidak ada data penumpang ditemukan
+                    </td>
+                  </tr>
                 )}
               </tbody>
             </table>
           </div>
-
-          {/* Pagination */}
-          {filteredPassengers.length > 0 && (
-            <div className="flex flex-col md:flex-row md:items-center justify-between px-6 py-4 border-t border-gray-700 bg-slate-900/40 gap-3">
-              <p className="text-xs text-gray-400">
-                Menampilkan{' '}
-                {filteredPassengers.length === 0
-                  ? 0
-                  : `${startIndex + 1}-${Math.min(
-                      startIndex + ITEMS_PER_PAGE,
-                      filteredPassengers.length,
-                    )}`}{' '}
-                dari {filteredPassengers.length} penumpang
-              </p>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={currentPage === 1}
-                  onClick={() =>
-                    setCurrentPage((prev) => Math.max(1, prev - 1))
-                  }
-                  className="border-gray-600 text-gray-200"
-                >
-                  Prev
-                </Button>
-                <span className="text-xs text-gray-400">
-                  Hal {currentPage} / {totalPages}
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={currentPage === totalPages}
-                  onClick={() =>
-                    setCurrentPage((prev) =>
-                      Math.min(totalPages, prev + 1),
-                    )
-                  }
-                  className="border-gray-600 text-gray-200"
-                >
-                  Next
-                </Button>
-              </div>
-            </div>
-          )}
         </div>
 
-        {filteredPassengers.length === 0 && !loading && (
-          <div className="flex flex-col items-center justify-center py-20 bg-slate-800/30 rounded-2xl border border-dashed border-gray-700">
-            <Users className="w-16 h-16 text-gray-600 mb-4" />
-            <p className="text-gray-400 text-lg">
-              No passenger records found
-            </p>
-          </div>
-        )}
+        {/* Modal Form */}
+        <AnimatePresence>
+          {isModalOpen && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4"
+              onClick={handleCloseModal}
+            >
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                className="bg-slate-900 border border-yellow-500/20 rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="p-6 border-b border-slate-800 flex items-center justify-between">
+                  <h2 className="text-xl font-bold text-white">
+                    {currentPassenger ? 'Edit Penumpang' : 'Tambah Penumpang'}
+                  </h2>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleCloseModal}
+                    className="text-gray-400 hover:text-white"
+                  >
+                    <X className="w-5 h-5" />
+                  </Button>
+                </div>
 
-        {/* Modal */}
-        <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
-          <DialogContent className="bg-slate-900 border-slate-700 text-white sm:max-w-lg">
-            <DialogHeader>
-              <DialogTitle className="text-xl font-bold text-yellow-400">
-                {currentPassenger ? 'Edit Passenger' : 'Add New Passenger'}
-              </DialogTitle>
-            </DialogHeader>
-            <form onSubmit={handleSubmit} className="space-y-4 mt-4">
-              <div className="space-y-2">
-                <Label htmlFor="passengerName">Nama (Full Name)</Label>
-                <Input
-                  id="passengerName"
-                  name="passengerName"
-                  value={formData.passengerName}
-                  onChange={handleInputChange}
-                  className="bg-slate-800 border-slate-600"
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="passengerPhone">No HP (WhatsApp)</Label>
-                <Input
-                  id="passengerPhone"
-                  name="passengerPhone"
-                  value={formData.passengerPhone}
-                  onChange={handleInputChange}
-                  className="bg-slate-800 border-slate-600"
-                  required
-                />
-              </div>
+                <form onSubmit={handleSubmit} className="p-6 space-y-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* Passenger Name */}
+                    <div className="space-y-2">
+                      <Label htmlFor="passengerName" className="text-gray-300">
+                        Nama Penumpang
+                      </Label>
+                      <Input
+                        id="passengerName"
+                        name="passengerName"
+                        value={formData.passengerName}
+                        onChange={handleInputChange}
+                        className="bg-slate-800 border-slate-600 text-white"
+                        required
+                      />
+                    </div>
 
-              {/* Tanggal & Jam */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="date">Tanggal Keberangkatan</Label>
-                  <Input
-                    id="date"
-                    name="date"
-                    type="date"
-                    value={formData.date}
-                    onChange={handleInputChange}
-                    className="bg-slate-800 border-slate-600"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="departureTime">Jam Keberangkatan</Label>
-                  <Input
-                    id="departureTime"
-                    name="departureTime"
-                    type="time"
-                    value={formData.departureTime}
-                    onChange={handleInputChange}
-                    className="bg-slate-800 border-slate-600"
-                  />
-                </div>
-              </div>
+                    {/* Passenger Phone */}
+                    <div className="space-y-2">
+                      <Label htmlFor="passengerPhone" className="text-gray-300">
+                        No HP
+                      </Label>
+                      <Input
+                        id="passengerPhone"
+                        name="passengerPhone"
+                        value={formData.passengerPhone}
+                        onChange={handleInputChange}
+                        className="bg-slate-800 border-slate-600 text-white"
+                        required
+                      />
+                    </div>
 
-              {/* Pickup / Dropoff */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="pickupAddress">Jemput (Pickup)</Label>
-                  <Input
-                    id="pickupAddress"
-                    name="pickupAddress"
-                    value={formData.pickupAddress}
-                    onChange={handleInputChange}
-                    className="bg-slate-800 border-slate-600"
-                    placeholder="Address/Location"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="dropoffAddress">Tujuan (Destination)</Label>
-                  <Input
-                    id="dropoffAddress"
-                    name="dropoffAddress"
-                    value={formData.dropoffAddress}
-                    onChange={handleInputChange}
-                    className="bg-slate-800 border-slate-600"
-                    placeholder="Address/Location"
-                  />
-                </div>
-              </div>
+                    {/* Date */}
+                    <div className="space-y-2">
+                      <Label htmlFor="date" className="text-gray-300">
+                        Tanggal
+                      </Label>
+                      <Input
+                        id="date"
+                        name="date"
+                        type="date"
+                        value={formData.date}
+                        onChange={handleInputChange}
+                        className="bg-slate-800 border-slate-600 text-white"
+                      />
+                    </div>
 
-              {/* Driver & Vehicle */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="driverName">Driver Info (Nama Driver)</Label>
-                  <Input
-                    id="driverName"
-                    name="driverName"
-                    value={formData.driverName}
-                    onChange={handleInputChange}
-                    className="bg-slate-800 border-slate-600"
-                    placeholder="Nama driver"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="vehicleCode">Vehicle Code</Label>
-                  <Input
-                    id="vehicleCode"
-                    name="vehicleCode"
-                    value={formData.vehicleCode}
-                    onChange={handleInputChange}
-                    className="bg-slate-800 border-slate-600"
-                    placeholder="Contoh: Unit-01 / BK 1234 XX"
-                  />
-                </div>
-              </div>
+                    {/* Departure Time */}
+                    <div className="space-y-2">
+                      <Label htmlFor="departureTime" className="text-gray-300">
+                        Jam Keberangkatan
+                      </Label>
+                      <Input
+                        id="departureTime"
+                        name="departureTime"
+                        type="time"
+                        value={formData.departureTime}
+                        onChange={handleInputChange}
+                        className="bg-slate-800 border-slate-600 text-white"
+                      />
+                    </div>
 
-              {/* Jenis Layanan */}
-              <div className="space-y-2">
-                <Label htmlFor="serviceType">Jenis Layanan</Label>
-                <select
-                  id="serviceType"
-                  name="serviceType"
-                  value={formData.serviceType}
-                  onChange={handleInputChange}
-                  className="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-yellow-500"
-                  required
-                >
-                  <option value="Reguler">Reguler</option>
-                  <option value="Dropping">Dropping</option>
-                  <option value="Rental">Rental</option>
-                  <option value="Paket Barang">Paket Barang</option>
-                </select>
-              </div>
+                    {/* Pickup Address */}
+                    <div className="space-y-2 sm:col-span-2">
+                      <Label htmlFor="pickupAddress" className="text-gray-300">
+                        Alamat Pickup
+                      </Label>
+                      <Input
+                        id="pickupAddress"
+                        name="pickupAddress"
+                        value={formData.pickupAddress}
+                        onChange={handleInputChange}
+                        className="bg-slate-800 border-slate-600 text-white"
+                      />
+                    </div>
 
-              {/* Tarif & Seat */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="totalAmount">Tarif (Fare Rp)</Label>
-                  <Input
-                    id="totalAmount"
-                    name="totalAmount"
-                    type="number"
-                    value={formData.totalAmount}
-                    onChange={handleInputChange}
-                    className="bg-slate-800 border-slate-600"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="selectedSeats">Seat (e.g., 1A, 2B)</Label>
-                  <Input
-                    id="selectedSeats"
-                    name="selectedSeats"
-                    value={formData.selectedSeats}
-                    onChange={handleInputChange}
-                    className="bg-slate-800 border-slate-600"
-                  />
-                </div>
-              </div>
+                    {/* Dropoff Address */}
+                    <div className="space-y-2 sm:col-span-2">
+                      <Label htmlFor="dropoffAddress" className="text-gray-300">
+                        Alamat Dropoff
+                      </Label>
+                      <Input
+                        id="dropoffAddress"
+                        name="dropoffAddress"
+                        value={formData.dropoffAddress}
+                        onChange={handleInputChange}
+                        className="bg-slate-800 border-slate-600 text-white"
+                      />
+                    </div>
 
-              {/* Foto E-Ticket */}
-              <div className="space-y-2">
-                <Label htmlFor="eTicketPhoto">Foto E-Ticket</Label>
-                <div className="flex items-center gap-3">
-                  <Input
-                    id="eTicketPhoto"
-                    type="file"
-                    accept="image/*"
-                    onChange={handleETicketChange}
-                    className="bg-slate-800 border-slate-600"
-                  />
-                  {formData.eTicketPhoto && (
-                    <img
-                      src={formData.eTicketPhoto}
-                      alt="Preview E-Ticket"
-                      className="w-12 h-12 object-cover rounded border border-slate-600"
+                    {/* Total Amount */}
+                    <div className="space-y-2">
+                      <Label htmlFor="totalAmount" className="text-gray-300">
+                        Total Amount
+                      </Label>
+                      <Input
+                        id="totalAmount"
+                        name="totalAmount"
+                        value={formData.totalAmount}
+                        onChange={handleInputChange}
+                        className="bg-slate-800 border-slate-600 text-white"
+                      />
+                    </div>
+
+                    {/* Selected Seats */}
+                    <div className="space-y-2">
+                      <Label htmlFor="selectedSeats" className="text-gray-300">
+                        Selected Seats
+                      </Label>
+                      <Input
+                        id="selectedSeats"
+                        name="selectedSeats"
+                        value={formData.selectedSeats}
+                        onChange={handleInputChange}
+                        className="bg-slate-800 border-slate-600 text-white"
+                      />
+                    </div>
+
+                    {/* Service Type */}
+                    <div className="space-y-2">
+                      <Label htmlFor="serviceType" className="text-gray-300">
+                        Service Type
+                      </Label>
+                      <select
+                        id="serviceType"
+                        name="serviceType"
+                        value={formData.serviceType}
+                        onChange={handleInputChange}
+                        className="w-full h-10 px-3 rounded-md bg-slate-800 border border-slate-600 text-white"
+                      >
+                        <option value="Reguler">Reguler</option>
+                        <option value="Dropping">Dropping</option>
+                        <option value="Rental">Rental</option>
+                        <option value="Paket Barang">Paket Barang</option>
+                      </select>
+                    </div>
+
+                    {/* Driver Name */}
+                    <div className="space-y-2">
+                      <Label htmlFor="driverName" className="text-gray-300">
+                        Driver Name
+                      </Label>
+                      <Input
+                        id="driverName"
+                        name="driverName"
+                        value={formData.driverName}
+                        onChange={handleInputChange}
+                        className="bg-slate-800 border-slate-600 text-white"
+                      />
+                    </div>
+
+                    {/* Vehicle Code */}
+                    <div className="space-y-2">
+                      <Label htmlFor="vehicleCode" className="text-gray-300">
+                        Vehicle Code
+                      </Label>
+                      <Input
+                        id="vehicleCode"
+                        name="vehicleCode"
+                        value={formData.vehicleCode}
+                        onChange={handleInputChange}
+                        className="bg-slate-800 border-slate-600 text-white"
+                      />
+                    </div>
+
+                    {/* E-Ticket Photo */}
+                    <div className="space-y-2 sm:col-span-2">
+                      <Label htmlFor="eTicketPhoto" className="text-gray-300">
+                        E-Ticket Photo (URL/Base64/BOOKING:&lt;id&gt;)
+                      </Label>
+                      <div className="flex items-center gap-3">
+                        <Input
+                          id="eTicketPhoto"
+                          name="eTicketPhoto"
+                          value={formData.eTicketPhoto}
+                          onChange={handleInputChange}
+                          className="bg-slate-800 border-slate-600 text-white"
+                        />
+                        {formData.eTicketPhoto && (
+                          <button
+                            type="button"
+                            onClick={() => openETicket(formData.eTicketPhoto)}
+                            className="text-yellow-400 underline text-sm"
+                          >
+                            Preview
+                          </button>
+                        )}
+                        {formData.eTicketPhoto && (
+                          <div className="ml-2">
+                            {isBookingMarker(formData.eTicketPhoto) ? (
+                              <div className="w-12 h-12 rounded border border-slate-600 bg-slate-800 flex items-center justify-center text-[9px] text-yellow-400">
+                                DOCS
+                              </div>
+                            ) : (
+                              <img
+                                src={resolveToAbsoluteUrl(formData.eTicketPhoto)}
+                                alt="Preview E-Ticket"
+                                className="w-12 h-12 object-cover rounded border border-slate-600"
+                              />
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Notes */}
+                  <div className="space-y-2">
+                    <Label htmlFor="notes" className="text-gray-300">
+                      Keterangan / Catatan
+                    </Label>
+                    <textarea
+                      id="notes"
+                      name="notes"
+                      value={formData.notes}
+                      onChange={handleInputChange}
+                      className="w-full min-h-[90px] px-3 py-2 rounded-md bg-slate-800 border border-slate-600 text-white"
                     />
-                  )}
+                  </div>
+
+                  {/* Buttons */}
+                  <div className="flex items-center justify-end gap-3 pt-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleCloseModal}
+                      className="border-slate-600 text-gray-300 hover:bg-slate-800"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="submit"
+                      className="bg-yellow-500 hover:bg-yellow-600 text-slate-900 font-bold"
+                    >
+                      {currentPassenger ? 'Update' : 'Create'}
+                    </Button>
+                  </div>
+                </form>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Delete Confirmation Modal */}
+        <AnimatePresence>
+          {isDeleteModalOpen && currentPassenger && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4"
+              onClick={handleCloseDeleteModal}
+            >
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                className="bg-slate-900 border border-red-500/20 rounded-xl w-full max-w-md"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="p-6 space-y-4">
+                  <h3 className="text-lg font-bold text-white">
+                    Hapus Penumpang?
+                  </h3>
+                  <p className="text-gray-400 text-sm">
+                    Anda yakin ingin menghapus data penumpang{' '}
+                    <span className="text-white font-semibold">
+                      {currentPassenger.passengerName}
+                    </span>
+                    ?
+                  </p>
+
+                  <div className="flex items-center justify-end gap-3 pt-2">
+                    <Button
+                      variant="outline"
+                      onClick={handleCloseDeleteModal}
+                      className="border-slate-600 text-gray-300 hover:bg-slate-800"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={handleDelete}
+                      className="bg-red-500 hover:bg-red-600 text-white font-bold"
+                    >
+                      Hapus
+                    </Button>
+                  </div>
                 </div>
-              </div>
-
-              {/* Notes */}
-              <div className="space-y-2">
-                <Label htmlFor="notes">Keterangan (Notes)</Label>
-                <Textarea
-                  id="notes"
-                  name="notes"
-                  value={formData.notes}
-                  onChange={handleInputChange}
-                  className="bg-slate-800 border-slate-600"
-                  placeholder="Additional info..."
-                />
-              </div>
-
-              <div className="flex justify-end gap-3 pt-4">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() => {
-                    setIsModalOpen(false);
-                    setCurrentPassenger(null);
-                  }}
-                  className="text-gray-400 hover:text-white hover:bg-slate-800"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  disabled={saving}
-                  className="bg-yellow-500 hover:bg-yellow-600 text-slate-900 font-bold"
-                >
-                  {saving
-                    ? currentPassenger
-                      ? 'Saving...'
-                      : 'Creating...'
-                    : currentPassenger
-                    ? 'Save Changes'
-                    : 'Create Passenger'}
-                </Button>
-              </div>
-            </form>
-          </DialogContent>
-        </Dialog>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </DashboardLayout>
   );

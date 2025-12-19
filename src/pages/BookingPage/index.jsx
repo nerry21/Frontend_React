@@ -41,12 +41,37 @@ const LS_LAST_BOOKING_SNAPSHOT = 'lastRegulerBookingSnapshot';
 const normalizePaymentStatus = (s) => String(s || '').trim();
 const isLunas = (s) => normalizePaymentStatus(s).toLowerCase() === 'lunas';
 
+// ✅ helper parse seats dari backend (array/json-string/comma-string)
+const parseSeatsFlexible = (v) => {
+  if (!v) return [];
+  if (Array.isArray(v)) return v.filter(Boolean).map((x) => String(x).trim()).filter(Boolean);
+  const s = String(v).trim();
+  if (!s) return [];
+  // json string
+  if (s.startsWith('[')) {
+    try {
+      const arr = JSON.parse(s);
+      if (Array.isArray(arr)) return arr.filter(Boolean).map((x) => String(x).trim()).filter(Boolean);
+    } catch {
+      // ignore
+    }
+  }
+  // comma separated
+  return s
+    .split(',')
+    .map((x) => String(x).trim())
+    .filter(Boolean);
+};
+
 const BookingPage = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
 
   const [step, setStep] = useState(1);
+
+  // ✅ flag supaya ketika datang dari Data Penumpang bisa auto-open docs jika sudah lunas
+  const [autoOpenDocs, setAutoOpenDocs] = useState(false);
 
   // --- CORE STATE ---
   const [bookingData, setBookingData] = useState({
@@ -98,6 +123,37 @@ const BookingPage = () => {
   const [showPayment, setShowPayment] = useState(false);
   const [showInvoice, setShowInvoice] = useState(false);
 
+  /**
+   * ✅ NEW: kalau masuk dari Data Penumpang:
+   * /booking?bookingId=42&showDocs=1
+   * - set bookingId
+   * - pindah ke step 4
+   * - refresh status & load detail booking
+   * - jika lunas -> buka invoice/e-ticket
+   */
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const bookingIdFromUrl = Number(params.get('bookingId') || params.get('id') || 0);
+    const showDocs = String(params.get('showDocs') || '').toLowerCase();
+    const wantDocs = showDocs === '1' || showDocs === 'true' || showDocs === 'yes';
+
+    if (!bookingIdFromUrl || bookingIdFromUrl <= 0) return;
+
+    setBookingData((prev) => ({
+      ...prev,
+      bookingId: bookingIdFromUrl,
+      // default kategori, nanti akan di-override dari backend jika ada
+      category: prev.category || 'Reguler',
+    }));
+
+    // langsung ke review agar tombol invoice muncul (dan UI konsisten)
+    setStep(4);
+
+    // set flag supaya auto open setelah status lunas terbaca
+    if (wantDocs) setAutoOpenDocs(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.search]);
+
   // ✅ Resume last booking (supaya setelah approve tidak balik ke awal)
   useEffect(() => {
     try {
@@ -109,8 +165,13 @@ const BookingPage = () => {
       // jangan ganggu kalau user sedang bikin booking baru (step bukan 1)
       if (step !== 1) return;
 
-      // kalau user datang via URL category, biarkan flow URL yang menangani
       const params = new URLSearchParams(location.search);
+
+      // ✅ NEW: kalau ada bookingId dari URL, biarkan URL yang menangani
+      const bookingIdFromUrl = Number(params.get('bookingId') || params.get('id') || 0);
+      if (bookingIdFromUrl) return;
+
+      // kalau user datang via URL category, biarkan flow URL yang menangani
       const catFromUrl = params.get('category');
       if (catFromUrl) return;
 
@@ -300,11 +361,57 @@ const BookingPage = () => {
           const nextMethod = d.paymentMethod || d.payment_method || '';
           const nextTotal = Number(d.totalAmount || d.total || d.total_amount || 0);
 
-          if (nextStatus || nextMethod || nextTotal) {
+          // ✅ NEW: sekalian hydrate data booking untuk invoice/e-ticket (biar buka dari Data Penumpang langsung tampil)
+          const nextCategory = d.category || d.serviceType || d.service_type || '';
+          const nextFrom = d.from || d.fromCity || d.from_city || d.route_from || '';
+          const nextTo = d.to || d.toCity || d.to_city || d.route_to || '';
+          const nextDate = d.date || d.trip_date || d.departure_date || '';
+          const nextTime = d.time || d.trip_time || d.departure_time || '';
+          const nextName = d.passengerName || d.passenger_name || d.bookingFor || d.booking_for || '';
+          const nextPhone = d.passengerPhone || d.passenger_phone || '';
+          const nextPickup = d.pickupLocation || d.pickup_location || d.pickupAddress || d.pickup_address || '';
+          const nextDrop = d.dropoffLocation || d.dropoff_location || d.dropoffAddress || d.dropoff_address || '';
+          const nextSeats = parseSeatsFlexible(
+            d.selectedSeats || d.selected_seats || d.seats || d.seats_json
+          );
+
+          if (
+            nextStatus ||
+            nextMethod ||
+            nextTotal ||
+            nextCategory ||
+            nextFrom ||
+            nextTo ||
+            nextDate ||
+            nextTime ||
+            nextName ||
+            nextPhone ||
+            nextPickup ||
+            nextDrop ||
+            (Array.isArray(nextSeats) && nextSeats.length > 0)
+          ) {
             setBookingData((prev) => {
               if (Number(prev.bookingId || 0) !== Number(bookingId)) return prev;
+
+              const mergedSeats =
+                Array.isArray(nextSeats) && nextSeats.length > 0 ? nextSeats : prev.selectedSeats;
+
               return {
                 ...prev,
+                category: nextCategory || prev.category,
+                from: nextFrom || prev.from,
+                to: nextTo || prev.to,
+                date: nextDate || prev.date,
+                time: nextTime || prev.time,
+                passengerName: nextName || prev.passengerName,
+                passengerPhone: nextPhone || prev.passengerPhone,
+                pickupLocation: nextPickup || prev.pickupLocation,
+                dropoffLocation: nextDrop || prev.dropoffLocation,
+                selectedSeats: mergedSeats,
+                passengerCount: mergedSeats?.length ? mergedSeats.length : prev.passengerCount,
+                pricePerSeat:
+                  (nextCategory || prev.category) === 'Reguler' ? REGULER_PRICE_PER_SEAT : prev.pricePerSeat,
+
                 paymentStatus: nextStatus || prev.paymentStatus,
                 paymentMethod: nextMethod || prev.paymentMethod,
                 totalAmount: nextTotal > 0 ? nextTotal : prev.totalAmount,
@@ -386,6 +493,30 @@ const BookingPage = () => {
     },
     [setBookingData]
   );
+
+  // ✅ NEW: auto refresh kalau bookingId datang dari URL (Data Penumpang)
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const bookingIdFromUrl = Number(params.get('bookingId') || params.get('id') || 0);
+    if (!bookingIdFromUrl || bookingIdFromUrl <= 0) return;
+
+    refreshPaymentStatus(bookingIdFromUrl);
+  }, [location.search, refreshPaymentStatus]);
+
+  // ✅ NEW: auto open invoice/e-ticket setelah status lunas terbaca
+  useEffect(() => {
+    if (!autoOpenDocs) return;
+    const id = Number(bookingData.bookingId || 0);
+    if (!id) return;
+
+    if (isLunas(bookingData.paymentStatus)) {
+      setShowInvoice(true);
+      setAutoOpenDocs(false);
+    } else {
+      // kalau status belum kebaca, biarkan polling/refresh bekerja
+      // tidak memaksa open modal agar tidak tampil kosong
+    }
+  }, [autoOpenDocs, bookingData.bookingId, bookingData.paymentStatus]);
 
   // ✅ Polling saat status "Menunggu Validasi"
   useEffect(() => {
