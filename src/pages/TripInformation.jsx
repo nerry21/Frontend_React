@@ -18,6 +18,394 @@ import { useToast } from '@/components/ui/use-toast';
 const API_BASE = 'http://localhost:8080/api';
 const ITEMS_PER_PAGE = 10; // 🔹 jumlah trip per halaman
 
+// ==============================
+// ✅ NEW Helpers (tidak menghapus kode lama)
+// - eSuratJalan bisa:
+//   1) data:image/... (upload manual)
+//   2) URL absolut (http/https)
+//   3) URL relatif backend (/api/...)
+//   4) JSON string (fallback / syncNotes)
+// ==============================
+const BACKEND_ORIGIN = API_BASE.replace(/\/api\/?$/, '');
+
+function isDataUrl(v) {
+  return typeof v === 'string' && v.startsWith('data:');
+}
+
+function isHttpUrl(v) {
+  return typeof v === 'string' && (v.startsWith('http://') || v.startsWith('https://'));
+}
+
+function isRelativeUrl(v) {
+  return typeof v === 'string' && v.startsWith('/');
+}
+
+function looksLikeJsonString(v) {
+  if (typeof v !== 'string') return false;
+  const s = v.trim();
+  return (s.startsWith('{') && s.endsWith('}')) || (s.startsWith('[') && s.endsWith(']'));
+}
+
+function resolveToAbsoluteBackendUrl(v) {
+  if (!v || typeof v !== 'string') return '';
+  if (isDataUrl(v)) return v;
+  if (isHttpUrl(v)) return v;
+  if (isRelativeUrl(v)) return `${BACKEND_ORIGIN}${v}`;
+  return v;
+}
+
+// ✅ NEW: paksa scope=trip untuk endpoint surat jalan booking
+// - jika URL mengarah ke /api/reguler/bookings/:id/surat-jalan tanpa scope=trip,
+//   maka tambahkan param scope=trip agar semua penumpang pada trip yang sama ikut.
+function ensureSuratJalanTripScope(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return rawUrl;
+
+  const u = rawUrl.trim();
+
+  // hanya untuk endpoint surat jalan booking
+  const isBookingSJ =
+    u.includes('/api/reguler/bookings/') &&
+    u.includes('/surat-jalan');
+
+  if (!isBookingSJ) return rawUrl;
+  if (u.includes('scope=trip')) return rawUrl;
+
+  const joiner = u.includes('?') ? '&' : '?';
+  return `${u}${joiner}scope=trip`;
+}
+
+// Render surat jalan yang “tahan banting” untuk berbagai bentuk payload JSON
+function SuratJalanRenderer({ payload, fallbackTrip }) {
+  // cari array penumpang di beberapa kemungkinan key
+  const candidates = [
+    payload?.passengers,
+    payload?.penumpang,
+    payload?.rows,
+    payload?.items,
+    payload?.data?.passengers,
+    payload?.data?.penumpang,
+    payload?.data?.rows,
+    payload?.data?.items,
+  ];
+
+  const rows = candidates.find((x) => Array.isArray(x)) || [];
+
+  const get = (obj, keys, def = '') => {
+    for (const k of keys) {
+      if (obj && obj[k] !== undefined && obj[k] !== null && String(obj[k]).trim() !== '') {
+        return obj[k];
+      }
+    }
+    return def;
+  };
+
+  const companyName =
+    get(payload, ['companyName', 'company', 'namaPerusahaan'], '') ||
+    'PT. LANCANG KUNING TRAVELINDO';
+
+  const title = get(payload, ['title', 'judul'], 'SURAT JALAN');
+
+  const licensePlate =
+    get(payload, ['licensePlate', 'noPol', 'plate'], '') ||
+    (fallbackTrip?.licensePlate || '');
+
+  const departureDate =
+    get(payload, ['departureDate', 'date', 'tanggal', 'tripDate'], '') ||
+    (fallbackTrip?.departureDate || '');
+
+  const driverName =
+    get(payload, ['driverName', 'driver', 'supir'], '') ||
+    (fallbackTrip?.driverName || '');
+
+  // buat baris tampil
+  const normalizeRow = (r) => {
+    const name = get(r, ['name', 'passengerName', 'nama'], '-');
+    const phone = get(r, ['phone', 'passengerPhone', 'noHp', 'hp'], '');
+    const seat = get(r, ['seat', 'seatCode', 'selectedSeat', 'selectedSeats', 'bangku'], '');
+
+    const pickup = get(r, ['pickup', 'jemput', 'pickupLocation', 'pickupAddress'], '-');
+    const dest = get(r, ['destination', 'tujuan', 'dropoffLocation', 'dropoffAddress'], '-');
+
+    const fare = get(r, ['fare', 'tarif', 'price', 'amount', 'totalAmount', 'pricePerSeat'], '');
+    const status = get(r, ['status', 'keterangan', 'paymentStatus'], '');
+
+    return { name, phone, seat, pickup, dest, fare, status };
+  };
+
+  // minimal 7 baris, mengikuti template
+  const rowCount = Math.max(7, rows.length);
+
+  return (
+    <div className="bg-white text-black rounded-lg overflow-hidden border border-slate-200">
+      {/* Header */}
+      <div className="p-6 border-b border-slate-200">
+        <div className="text-center">
+          <div className="text-2xl font-extrabold">{companyName}</div>
+          <div className="text-lg font-bold mt-1">{title}</div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+          <div className="flex gap-2">
+            <span className="font-semibold w-24">No. Pol</span>
+            <span>:</span>
+            <span className="font-mono">{licensePlate || '-'}</span>
+          </div>
+
+          <div className="flex gap-2">
+            <span className="font-semibold w-24">Tanggal</span>
+            <span>:</span>
+            <span>{departureDate || '-'}</span>
+          </div>
+
+          <div className="flex gap-2">
+            <span className="font-semibold w-24">Driver</span>
+            <span>:</span>
+            <span>{driverName || '-'}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="p-6">
+        <div className="overflow-x-auto">
+          <table className="w-full border border-slate-300 text-sm">
+            <thead>
+              <tr className="bg-slate-100">
+                <th className="border border-slate-300 px-3 py-2 w-12">NO.</th>
+                <th className="border border-slate-300 px-3 py-2">NAMA / NOMOR HP</th>
+                <th className="border border-slate-300 px-3 py-2">JEMPUT</th>
+                <th className="border border-slate-300 px-3 py-2">TUJUAN</th>
+                <th className="border border-slate-300 px-3 py-2 w-28">TARIF</th>
+                <th className="border border-slate-300 px-3 py-2 w-28">KETERANGAN</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length > 0 ? (
+                Array.from({ length: rowCount }, (_, idx) => {
+                  const r = rows[idx];
+                  const hasData = !!r;
+                  const rr = hasData ? normalizeRow(r) : null;
+                  const seatLabel = rr?.seat ? ` (${String(rr.seat)})` : '';
+                  return (
+                    <tr key={idx}>
+                      <td className="border border-slate-300 px-3 py-2 text-center">{idx + 1}</td>
+                      <td className="border border-slate-300 px-3 py-2">
+                        {hasData ? (
+                          <>
+                            <div className="font-semibold">
+                              {rr.name}
+                              {seatLabel}
+                            </div>
+                            {rr.phone ? <div className="text-xs text-slate-600">{rr.phone}</div> : null}
+                          </>
+                        ) : null}
+                      </td>
+                      <td className="border border-slate-300 px-3 py-2">{hasData ? rr.pickup : ''}</td>
+                      <td className="border border-slate-300 px-3 py-2">{hasData ? rr.dest : ''}</td>
+                      <td className="border border-slate-300 px-3 py-2 text-right">
+                        {hasData && rr.fare !== '' ? rr.fare : ''}
+                      </td>
+                      <td className="border border-slate-300 px-3 py-2 text-center">
+                        {hasData && rr.status !== '' ? rr.status : ''}
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td className="border border-slate-300 px-3 py-6 text-center text-slate-600" colSpan={6}>
+                    Data surat jalan belum ada.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Footer sign */}
+        <div className="mt-10 grid grid-cols-2 gap-10 text-sm">
+          <div className="text-left">
+            <div className="font-semibold">PENGEMUDI</div>
+            <div className="mt-12 border-t border-slate-400 w-56" />
+          </div>
+          <div className="text-right">
+            <div className="font-semibold">PENGURUS</div>
+            <div className="mt-12 border-t border-slate-400 w-56 ml-auto" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==============================
+// ✅ NEW: Template Surat Jalan "Belum Sesuai 1" (seperti Booking Confirmed)
+// - Dipakai saat payload berasal dari endpoint booking: /api/reguler/bookings/:id/surat-jalan
+// - Tidak menghapus SuratJalanRenderer lama (tetap jadi fallback)
+// ==============================
+function formatDateID(dateString) {
+  if (!dateString) return '';
+  const d = new Date(dateString);
+  if (Number.isNaN(d.getTime())) return String(dateString);
+  return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+function isBookingSuratJalanPayload(p) {
+  if (!p || typeof p !== 'object') return false;
+  // payload backend reguler: { bookingId, tripDate, pickupLocation, dropoffLocation, pricePerSeat, total, passengerPhone, passengers:[...] }
+  return Array.isArray(p.passengers) && (p.bookingId || p.tripDate || p.pickupLocation || p.dropoffLocation);
+}
+
+function SuratJalanBookingTemplate({ payload, trip }) {
+  const paxList = Array.isArray(payload?.passengers) ? payload.passengers : [];
+
+  // NOTE:
+  // untuk scope=trip, backend akan mengosongkan passengerPhone/pickup/dropoff di level root,
+  // karena sudah ada per-penumpang.
+  const hpSJ = payload?.passengerPhone || '';
+  const jemputSJ = payload?.pickupLocation || '';
+  const tujuanSJ = payload?.dropoffLocation || '';
+
+  const seatCount = paxList.length || 0;
+  const tarifPerSeat =
+    Number(payload?.pricePerSeat || 0) ||
+    (seatCount > 0 ? Math.round(Number(payload?.total || 0) / seatCount) : 0);
+
+  const noPol = (trip?.licensePlate || '').trim() || '..............';
+  const driver = (trip?.driverName || '').trim() || '..............';
+  const tanggal = formatDateID(payload?.tripDate || trip?.departureDate);
+
+  // ✅ FIX: baris mengikuti jumlah penumpang, minimal 7
+  const rowCount = Math.max(7, paxList.length);
+
+  // normalize penumpang (support payload baru: phone/pickupLocation/dropoffLocation/fare/status)
+  const getRow = (p) => {
+    const name = (p?.name || p?.passengerName || '').trim();
+    const seat = (p?.seat || p?.seatCode || '').toString().trim();
+    const phone = (p?.phone || p?.passengerPhone || hpSJ || '').toString().trim();
+    const pickup = (p?.pickupLocation || p?.pickupAddress || jemputSJ || '').toString().trim();
+    const dest = (p?.dropoffLocation || p?.dropoffAddress || tujuanSJ || '').toString().trim();
+    const fare = Number(p?.fare ?? tarifPerSeat ?? 0);
+    const status = (p?.status || p?.paymentStatus || '').toString().trim();
+    return { name, seat, phone, pickup, dest, fare, status };
+  };
+
+  return (
+    <div className="w-full bg-white text-black p-8 font-sans border border-gray-200 shadow-xl rounded-lg">
+      <div className="flex items-start justify-between mb-6">
+        <div className="flex items-center gap-4">
+          <div className="w-20 h-20 bg-white border-2 border-black rounded-full p-1 flex items-center justify-center shrink-0">
+            <img
+              src="https://horizons-cdn.hostinger.com/aa3a21e0-4488-4247-a025-83814179d1a2/c29b7033714ce9b851a1fd1b040f6cfb.jpg"
+              className="w-full h-full object-contain rounded-full"
+              alt="Logo"
+            />
+          </div>
+          <div>
+            <h1 className="text-3xl font-black uppercase tracking-tight leading-none mb-1">
+              PT. LANCANG KUNING TRAVELINDO
+            </h1>
+            <h2 className="text-2xl font-bold uppercase tracking-wider text-center">SURAT JALAN</h2>
+          </div>
+        </div>
+
+        <div className="text-right text-sm font-bold space-y-1 min-w-[250px]">
+          <div className="flex justify-between items-center border-b border-black border-dashed pb-1">
+            <span>No. Pol :</span>
+            <span className="font-mono ml-2">{noPol}</span>
+          </div>
+          <div className="flex justify-between items-center border-b border-black border-dashed pb-1">
+            <span>Tanggal :</span>
+            <span className="font-mono ml-2">{tanggal || '..............'}</span>
+          </div>
+          <div className="flex justify-between items-center border-b border-black border-dashed pb-1">
+            <span>Driver :</span>
+            <span className="font-mono ml-2">{driver}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="w-full mb-12 border-2 border-black">
+        <table className="w-full text-sm border-collapse">
+          <thead>
+            <tr className="border-b-2 border-black">
+              <th className="border-r border-black p-2 w-10 text-center font-bold uppercase">No.</th>
+              <th className="border-r border-black p-2 text-left font-bold uppercase">Nama / Nomor HP</th>
+              <th className="border-r border-black p-2 text-left font-bold uppercase w-1/5">Jemput</th>
+              <th className="border-r border-black p-2 text-left font-bold uppercase w-1/5">Tujuan</th>
+              <th className="border-r border-black p-2 text-center font-bold uppercase w-24">Tarif</th>
+              <th className="p-2 text-center font-bold uppercase w-28">Keterangan</th>
+            </tr>
+          </thead>
+
+          <tbody className="divide-y divide-black">
+            {Array.from({ length: rowCount }, (_, i) => {
+              const p = paxList[i];
+              const hasData = !!p;
+              const rr = hasData ? getRow(p) : null;
+
+              const seatLabel = rr?.seat ? `(${String(rr.seat).toUpperCase()})` : '';
+              const nameUp = (rr?.name || '').toUpperCase();
+
+              return (
+                <tr key={i} className="h-10">
+                  <td className="border-r border-black p-2 text-center font-bold">{i + 1}</td>
+
+                  <td className="border-r border-black p-2 font-bold uppercase">
+                    {hasData ? (
+                      <>
+                        {nameUp}{' '}
+                        {seatLabel ? <span className="font-normal text-xs">{seatLabel}</span> : null}
+                        <br />
+                        <span className="font-normal text-xs">{rr.phone || ''}</span>
+                      </>
+                    ) : null}
+                  </td>
+
+                  <td className="border-r border-black p-2 uppercase text-xs font-semibold">
+                    {hasData ? (rr.pickup || '') : ''}
+                  </td>
+
+                  <td className="border-r border-black p-2 uppercase text-xs font-semibold">
+                    {hasData ? (rr.dest || '') : ''}
+                  </td>
+
+                  <td className="border-r border-black p-2 text-right">
+                    {hasData ? (rr.fare ? rr.fare.toLocaleString() : '') : ''}
+                  </td>
+
+                  <td className="p-2 text-center text-[10px] font-bold">
+                    {hasData ? (rr.status ? rr.status.toUpperCase() : '-') : ''}
+                  </td>
+                </tr>
+              );
+            })}
+
+            {paxList.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="p-3 text-center text-xs font-semibold">
+                  Data penumpang belum ada. Pastikan endpoint booking surat jalan mengembalikan passengers.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="flex justify-between px-16 text-center text-sm font-bold uppercase">
+        <div className="flex flex-col gap-16">
+          <span>Pengemudi</span>
+          <span className="border-t border-black pt-1 px-4 min-w-[150px]">(.........................)</span>
+        </div>
+        <div className="flex flex-col gap-16">
+          <span>Pengurus</span>
+          <span className="border-t border-black pt-1 px-4 min-w-[150px]">(.........................)</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const TripInformation = () => {
   const { toast } = useToast();
   const [trips, setTrips] = useState([]);
@@ -33,13 +421,169 @@ const TripInformation = () => {
     tripNumber: '',
     departureDate: '',
     departureTime: '', // 🔹 jam keberangkatan
-    eSuratJalan: '', // string (dataURL/base64)
+    eSuratJalan: '', // string (dataURL/base64) / URL / JSON
   });
 
   // 🔍 Search & Pagination
   const [searchInput, setSearchInput] = useState('');
   const [searchText, setSearchText] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+
+  // ==============================
+  // ✅ NEW: modal preview surat jalan dari API booking (informasi 6)
+  // ==============================
+  const [isSuratPreviewOpen, setIsSuratPreviewOpen] = useState(false);
+  const [suratPreviewTrip, setSuratPreviewTrip] = useState(null);
+  const [suratLoading, setSuratLoading] = useState(false);
+  const [suratErr, setSuratErr] = useState('');
+  const [suratType, setSuratType] = useState('json'); // 'json' | 'image' | 'raw'
+  const [suratPayload, setSuratPayload] = useState(null);
+
+  const openSuratPreview = async (trip) => {
+    try {
+      setSuratPreviewTrip(trip);
+      setIsSuratPreviewOpen(true);
+      setSuratLoading(true);
+      setSuratErr('');
+      setSuratPayload(null);
+      setSuratType('json');
+
+      const vRaw = trip?.eSuratJalan;
+
+      if (!vRaw) {
+        setSuratErr('Surat jalan belum tersedia.');
+        setSuratType('raw');
+        setSuratPayload({ raw: '' });
+        return;
+      }
+
+      // jika base64 upload manual → tampilkan gambar
+      if (isDataUrl(vRaw)) {
+        setSuratType('image');
+        setSuratPayload({ src: vRaw });
+        return;
+      }
+
+      // jika string JSON di DB (bisa 2 tipe):
+      // 1) payload surat jalan langsung
+      // 2) "syncNotes" yang berisi suratJalanApi (hasil auto-sync booking)
+      if (looksLikeJsonString(vRaw)) {
+        try {
+          const parsed = JSON.parse(vRaw);
+
+          // ✅ kalau format syncNotes, ambil URL-nya lalu fetch surat jalan asli
+          if (parsed?.suratJalanApi) {
+            const fixed = ensureSuratJalanTripScope(parsed.suratJalanApi);
+            const url2 = resolveToAbsoluteBackendUrl(fixed);
+
+            const res2 = await fetch(url2, { headers: { Accept: 'application/json' } });
+            const data2 = await res2.json().catch(() => ({}));
+
+            if (!res2.ok) {
+              setSuratErr(data2?.error || 'Gagal memuat surat jalan.');
+              setSuratType('raw');
+              setSuratPayload({ raw: JSON.stringify(data2 || {}, null, 2) });
+              return;
+            }
+
+            // support format backend yang mengembalikan image
+            if (data2?.__type === 'image' && data2?.src) {
+              setSuratType('image');
+              setSuratPayload({ src: data2.src });
+              return;
+            }
+
+            setSuratType('json');
+            setSuratPayload(data2);
+            return;
+          }
+
+          // ✅ kalau JSON payload surat jalan langsung, tapi kita tetap paksa ambil versi scope=trip jika ada bookingId
+          if (isBookingSuratJalanPayload(parsed) && parsed?.bookingId) {
+            const tripUrl = `${API_BASE}/reguler/bookings/${parsed.bookingId}/surat-jalan?scope=trip`;
+            const res3 = await fetch(tripUrl, { headers: { Accept: 'application/json' } });
+            const data3 = await res3.json().catch(() => ({}));
+
+            if (res3.ok) {
+              if (data3?.__type === 'image' && data3?.src) {
+                setSuratType('image');
+                setSuratPayload({ src: data3.src });
+                return;
+              }
+              setSuratType('json');
+              setSuratPayload(data3);
+              return;
+            }
+
+            // fallback ke parsed kalau refetch gagal
+            setSuratType('json');
+            setSuratPayload(parsed);
+            return;
+          }
+
+          // default: json surat jalan langsung
+          setSuratType('json');
+          setSuratPayload(parsed);
+          return;
+        } catch {
+          // lanjut fetch
+        }
+      }
+
+      // URL (relatif/absolut) → fetch JSON
+      const fixedV = ensureSuratJalanTripScope(String(vRaw));
+      const url = resolveToAbsoluteBackendUrl(fixedV);
+
+      if (!url) {
+        setSuratErr('URL surat jalan tidak valid.');
+        setSuratType('raw');
+        setSuratPayload({ raw: String(vRaw || '') });
+        return;
+      }
+
+      const res = await fetch(url, {
+        headers: {
+          Accept: 'application/json',
+        },
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setSuratErr(data?.error || 'Gagal memuat surat jalan.');
+        setSuratType('raw');
+        setSuratPayload({ raw: JSON.stringify(data || {}, null, 2) });
+        return;
+      }
+
+      // support format backend yang mengembalikan image
+      if (data?.__type === 'image' && data?.src) {
+        setSuratType('image');
+        setSuratPayload({ src: data.src });
+        return;
+      }
+
+      // default JSON render
+      setSuratType('json');
+      setSuratPayload(data);
+    } catch (err) {
+      console.error(err);
+      setSuratErr(err?.message || 'Gagal memuat surat jalan.');
+      setSuratType('raw');
+      setSuratPayload({ raw: '' });
+    } finally {
+      setSuratLoading(false);
+    }
+  };
+
+  const closeSuratPreview = () => {
+    setIsSuratPreviewOpen(false);
+    setSuratPreviewTrip(null);
+    setSuratPayload(null);
+    setSuratErr('');
+    setSuratType('json');
+    setSuratLoading(false);
+  };
 
   // --- LOAD DATA DARI BACKEND ---
   useEffect(() => {
@@ -204,7 +748,6 @@ const TripInformation = () => {
   const closeModal = () => setIsModalOpen(false);
 
   // 🔎 FILTER & PAGINATION
-
   const filteredTrips = trips.filter((trip) => {
     const q = searchText.trim().toLowerCase();
     if (!q) return true;
@@ -382,7 +925,7 @@ const TripInformation = () => {
                       <td className="py-4 px-6">
                         <div className="flex items-center gap-2">
                           <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-yellow-500 font-bold">
-                            {trip.driverName?.charAt(0)}
+                            {(trip.driverName?.charAt(0) || '?').toUpperCase()}
                           </div>
                           <span className="text-gray-300 font-medium">
                             {trip.driverName}
@@ -407,11 +950,31 @@ const TripInformation = () => {
                         {trip.eSuratJalan ? (
                           <div className="flex items-center gap-2 text-green-400 text-sm">
                             <FileText className="w-4 h-4" /> Uploaded
-                            <img
-                              src={trip.eSuratJalan}
-                              alt="Preview"
-                              className="w-8 h-8 object-cover rounded border border-gray-600 ml-2"
-                            />
+
+                            {isDataUrl(trip.eSuratJalan) ? (
+                              <button
+                                type="button"
+                                onClick={() => openSuratPreview(trip)}
+                                className="ml-2"
+                                title="Preview Surat Jalan"
+                              >
+                                <img
+                                  src={trip.eSuratJalan}
+                                  alt="Preview"
+                                  className="w-8 h-8 object-cover rounded border border-gray-600"
+                                />
+                              </button>
+                            ) : (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="ml-2 border-gray-600 text-gray-200"
+                                onClick={() => openSuratPreview(trip)}
+                              >
+                                Prev
+                              </Button>
+                            )}
                           </div>
                         ) : (
                           <span className="text-gray-600 text-xs italic">
@@ -484,6 +1047,58 @@ const TripInformation = () => {
             </div>
           )}
         </div>
+
+        {/* ✅ NEW: Preview Surat Jalan Modal */}
+        <Dialog open={isSuratPreviewOpen} onOpenChange={(v) => (v ? setIsSuratPreviewOpen(true) : closeSuratPreview())}>
+          <DialogContent className="bg-slate-900 border-slate-700 text-white sm:max-w-5xl">
+            <DialogHeader>
+              <DialogTitle className="text-xl font-bold text-yellow-400">
+                E-Surat Jalan
+              </DialogTitle>
+            </DialogHeader>
+
+            <div className="mt-3">
+              {suratLoading ? (
+                <div className="py-10 text-center text-gray-400">Memuat surat jalan...</div>
+              ) : suratErr ? (
+                <div className="py-6 text-center">
+                  <div className="text-red-400 font-semibold">{suratErr}</div>
+                </div>
+              ) : suratType === 'image' ? (
+                <div className="bg-white rounded-lg p-3">
+                  <img
+                    src={suratPayload?.src}
+                    alt="Surat Jalan"
+                    className="w-full h-auto rounded"
+                  />
+                </div>
+              ) : suratType === 'json' ? (
+                isBookingSuratJalanPayload(suratPayload) ? (
+                  <SuratJalanBookingTemplate payload={suratPayload} trip={suratPreviewTrip} />
+                ) : (
+                  <SuratJalanRenderer payload={suratPayload} fallbackTrip={suratPreviewTrip} />
+                )
+              ) : (
+                <div className="bg-slate-950 rounded-lg p-4 border border-slate-700">
+                  <pre className="text-xs text-gray-300 whitespace-pre-wrap">
+                    {suratPayload?.raw || 'Tidak ada data.'}
+                  </pre>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end pt-4">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={closeSuratPreview}
+                className="text-gray-400 hover:text-white hover:bg-slate-800"
+              >
+                Close
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {/* Create/Edit Modal */}
         <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>

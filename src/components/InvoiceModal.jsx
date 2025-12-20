@@ -201,7 +201,8 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
     const controller = new AbortController();
     setSuratLoading(true);
 
-    fetch(`${API_BASE}/api/reguler/bookings/${actualBookingId}/surat-jalan`, { signal: controller.signal })
+    // ✅ FIX UTAMA: scope=trip agar semua booking di tanggal+jam+route yang sama ikut tampil
+    fetch(`${API_BASE}/api/reguler/bookings/${actualBookingId}/surat-jalan?scope=trip`, { signal: controller.signal })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.message || data?.error || "Gagal mengambil data surat jalan");
@@ -256,16 +257,19 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
   // ===== Helpers surat jalan =====
   const paxList = Array.isArray(suratJalan?.passengers) ? suratJalan.passengers : [];
 
-  // jemput/tujuan ambil dari suratJalan atau bookingData (pickupLocation) juga
+  // fallback global (kalau backend tidak kirim per-penumpang)
   const jemputSJ = suratJalan?.pickupLocation || pickupLocation || pickupAddress || from || "";
   const tujuanSJ = suratJalan?.dropoffLocation || dropoffLocation || dropoffAddress || to || "";
+  const hpSJ = suratJalan?.passengerPhone || passengerPhone || "";
 
+  // fallback tarif jika tidak ada fare per penumpang
   const seatCount = selectedSeats?.length || paxList?.length || 0;
-  const tarifPerSeat =
+  const tarifFallback =
     Number(suratJalan?.pricePerSeat || 0) ||
     (seatCount > 0 ? Math.round((Number(totalAmount || 0)) / seatCount) : Number(totalAmount || 0));
 
-  const hpSJ = suratJalan?.passengerPhone || passengerPhone || "";
+  // jumlah baris minimal 7 seperti template surat jalan
+  const rowCount = Math.max(7, paxList.length);
 
   const LockedBox = ({ title }) => (
     <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-start gap-3">
@@ -602,9 +606,22 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
                             </tr>
                           ) : (
                             <>
-                              {Array.from({ length: 7 }, (_, i) => {
+                              {Array.from({ length: rowCount }, (_, i) => {
                                 const p = paxList[i];
-                                const hasData = !!p?.name;
+
+                                // ✅ FIX: data dianggap ada kalau minimal seat / name / phone ada
+                                const hasData = !!(p && (p.name || p.seat || p.phone || p.pickupLocation || p.dropoffLocation));
+
+                                const seat = String(p?.seat || "").toUpperCase().trim();
+                                const name = String(p?.name || "").trim();
+                                const phone = String(p?.phone || hpSJ || "").trim();
+
+                                const jemput = String(p?.pickupLocation || jemputSJ || "").trim();
+                                const tujuan = String(p?.dropoffLocation || tujuanSJ || "").trim();
+
+                                const fare = Number(p?.fare ?? tarifFallback ?? 0);
+                                const status =
+                                  String(p?.status || (isPaid ? "LUNAS" : (displayPaymentStatus || "BELUM BAYAR"))).toUpperCase();
 
                                 return (
                                   <tr key={i} className="h-10">
@@ -613,27 +630,28 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
                                     <td className="border-r border-black p-2 font-bold uppercase">
                                       {hasData ? (
                                         <>
-                                          {p.name} {p.seat ? <span className="font-normal text-xs">({String(p.seat).toUpperCase()})</span> : null}
+                                          {name ? name : ""}
+                                          {seat ? <span className="font-normal text-xs"> ({seat})</span> : null}
                                           <br />
-                                          <span className="font-normal text-xs">{hpSJ}</span>
+                                          <span className="font-normal text-xs">{phone}</span>
                                         </>
                                       ) : null}
                                     </td>
 
                                     <td className="border-r border-black p-2 uppercase text-xs font-semibold">
-                                      {hasData ? (jemputSJ || "") : ""}
+                                      {hasData ? jemput : ""}
                                     </td>
 
                                     <td className="border-r border-black p-2 uppercase text-xs font-semibold">
-                                      {hasData ? (tujuanSJ || "") : ""}
+                                      {hasData ? tujuan : ""}
                                     </td>
 
                                     <td className="border-r border-black p-2 text-right">
-                                      {hasData ? (tarifPerSeat ? tarifPerSeat.toLocaleString() : "") : ""}
+                                      {hasData ? (fare ? fare.toLocaleString() : "") : ""}
                                     </td>
 
                                     <td className="p-2 text-center text-[10px] font-bold">
-                                      {hasData ? (isPaid ? "LUNAS" : (displayPaymentStatus || "BELUM BAYAR").toUpperCase()) : ""}
+                                      {hasData ? status : ""}
                                     </td>
                                   </tr>
                                 );
@@ -642,7 +660,7 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
                               {paxList.length === 0 ? (
                                 <tr>
                                   <td colSpan={6} className="p-3 text-center text-xs font-semibold">
-                                    Tidak ada data penumpang dari backend. Cek endpoint: <code>/api/reguler/bookings/{String(actualBookingId)}/surat-jalan</code>
+                                    Tidak ada data penumpang dari backend. Pastikan endpoint mengembalikan passengers untuk scope=trip.
                                   </td>
                                 </tr>
                               ) : null}
