@@ -28,6 +28,38 @@ import { useToast } from '@/components/ui/use-toast';
 const API_BASE = 'http://localhost:8080/api';
 const DEPARTURE_API = `${API_BASE}/departure-settings`;
 
+// ==============================
+// ✅ NEW Helpers (tidak menghapus kode lama)
+// - suratJalanFile bisa:
+//   1) data:image/... (upload manual)
+//   2) URL absolut (http/https)
+//   3) URL relatif backend (/api/...)
+// ==============================
+const BACKEND_ORIGIN = API_BASE.replace(/\/api\/?$/, '');
+
+function isDataUrl(v) {
+  return typeof v === 'string' && v.startsWith('data:');
+}
+function isHttpUrl(v) {
+  return typeof v === 'string' && (v.startsWith('http://') || v.startsWith('https://'));
+}
+function isRelativeUrl(v) {
+  return typeof v === 'string' && v.startsWith('/');
+}
+function resolveToAbsoluteBackendUrl(v) {
+  if (!v || typeof v !== 'string') return '';
+  if (isDataUrl(v)) return v;
+  if (isHttpUrl(v)) return v;
+  if (isRelativeUrl(v)) return `${BACKEND_ORIGIN}${v}`;
+  // fallback: sudah berupa path tanpa leading slash
+  return `${BACKEND_ORIGIN}/${v}`;
+}
+function looksLikePdf(v) {
+  if (!v || typeof v !== 'string') return false;
+  if (v.startsWith('data:application/pdf')) return true;
+  return v.toLowerCase().includes('.pdf');
+}
+
 const PengaturanKeberangkatan = () => {
   const { toast } = useToast();
   const [items, setItems] = useState([]);
@@ -53,6 +85,11 @@ const PengaturanKeberangkatan = () => {
   });
 
   const [searchText, setSearchText] = useState('');
+
+  // ✅ Preview E-Surat Jalan (tanpa keluar tab / window)
+  const [isSuratPreviewOpen, setIsSuratPreviewOpen] = useState(false);
+  const [suratPreviewSrc, setSuratPreviewSrc] = useState('');
+  const [suratPreviewIsPdf, setSuratPreviewIsPdf] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -162,6 +199,16 @@ const PengaturanKeberangkatan = () => {
       }));
     };
     reader.readAsDataURL(file);
+  };
+
+  // ✅ open preview e-surat jalan (img/pdf) di modal
+  const openSuratPreview = (item) => {
+    const raw = item?.suratJalanFile || '';
+    if (!raw) return;
+    const abs = resolveToAbsoluteBackendUrl(raw);
+    setSuratPreviewSrc(abs);
+    setSuratPreviewIsPdf(looksLikePdf(abs));
+    setIsSuratPreviewOpen(true);
   };
 
   const handleSubmit = async (e) => {
@@ -371,15 +418,31 @@ const PengaturanKeberangkatan = () => {
                         </div>
                       </td>
                       <td className="py-3 px-6 text-sm text-gray-200">
-                        {item.suratJalanFile ? (
-                          <a
-                            href={item.suratJalanFile}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs text-yellow-400 underline"
-                          >
-                            Lihat Surat Jalan
-                          </a>
+                        {hasSuratJalan(item.suratJalanFile) ? (
+                          <div className="flex items-center gap-2">
+                            <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
+                              <Upload className="w-3 h-3" /> Uploaded
+                            </span>
+
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 border-gray-600 text-gray-200"
+                              onClick={() => openSuratPreview(item)}
+                            >
+                              Prev
+                            </Button>
+
+                            {/* tetap ada link (kode lama) */}
+                            <a
+                              href={resolveToAbsoluteBackendUrl(item.suratJalanFile)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs text-yellow-400 underline"
+                            >
+                              Open
+                            </a>
+                          </div>
                         ) : (
                           <span className="text-xs text-gray-500">
                             Belum upload
@@ -598,9 +661,48 @@ const PengaturanKeberangkatan = () => {
             </form>
           </DialogContent>
         </Dialog>
+
+        {/* ✅ Preview Modal E-Surat Jalan (dari booking / upload manual) */}
+        <Dialog open={isSuratPreviewOpen} onOpenChange={setIsSuratPreviewOpen}>
+          <DialogContent className="bg-slate-900 border-slate-700 text-white sm:max-w-5xl">
+            <DialogHeader>
+              <DialogTitle className="text-xl font-bold text-yellow-400">
+                E-Surat Jalan
+              </DialogTitle>
+            </DialogHeader>
+
+            <div className="w-full h-[75vh] bg-slate-950/50 border border-slate-700 rounded-lg overflow-hidden flex items-center justify-center">
+              {!suratPreviewSrc ? (
+                <div className="text-sm text-gray-400">Tidak ada file untuk dipreview.</div>
+              ) : suratPreviewIsPdf ? (
+                <iframe
+                  title="Preview Surat Jalan"
+                  src={suratPreviewSrc}
+                  className="w-full h-full"
+                />
+              ) : (
+                <img
+                  src={suratPreviewSrc}
+                  alt="Preview Surat Jalan"
+                  className="max-w-full max-h-full object-contain"
+                />
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </DashboardLayout>
   );
 };
 
 export default PengaturanKeberangkatan;
+  function hasSuratJalan(v) {
+    if (v === null || v === undefined) return false;
+    const s = String(v).trim();
+    if (!s) return false;
+    const lower = s.toLowerCase();
+    if (lower === '-' || lower === 'belum upload' || lower === 'null' || lower === 'undefined') return false;
+    return true;
+  }
+
+
