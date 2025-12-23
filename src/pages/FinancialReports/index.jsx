@@ -424,15 +424,18 @@ export default function FinancialReports() {
                 className="w-12 h-12 rounded-2xl shadow-lg shadow-yellow-500/20"
               />
               <div>
-                <div className="flex items-center gap-2">
-                  <h1 className="text-3xl md:text-4xl font-extrabold text-white tracking-tight">Laporan Keuangan</h1>
-                  <span className="text-[10px] px-2 py-1 rounded-full border border-yellow-500/20 bg-yellow-500/10 text-yellow-300 font-extrabold">
-                    2025-2030
-                  </span>
-                </div>
-                <p className="text-gray-400 mt-1">Trips + Vehicle Costs + Company Expenses</p>
+              <div className="flex items-center gap-2">
+                <h1 className="text-3xl md:text-4xl font-extrabold text-white tracking-tight">Laporan Keuangan</h1>
+                <span className="text-[10px] px-2 py-1 rounded-full border border-yellow-500/20 bg-yellow-500/10 text-yellow-300 font-extrabold">
+                  2025-2030
+                </span>
               </div>
+              <p className="text-gray-400 mt-1">Trips + Vehicle Costs + Company Expenses</p>
+              <p className="text-xs text-yellow-200/80 mt-2">
+                Data otomatis masuk setelah validasi pembayaran & status keberangkatan "Berangkat" (tanggal/rute dari Booking, kode mobil + driver dari Pengaturan Keberangkatan, No Order format LKT/NN/KODE).
+              </p>
             </div>
+          </div>
 
             <div className="flex flex-wrap gap-2">
               <Button onClick={() => setViewMode('vehicle')} className="bg-blue-600 hover:bg-blue-700 text-white">

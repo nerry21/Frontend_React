@@ -115,6 +115,7 @@ const PengaturanKeberangkatan = () => {
     serviceType: 'Reguler',
     driverName: '',
     vehicleCode: '',
+    vehicleType: '',
     suratJalanFile: '',
     suratJalanFileName: '',
     departureStatus: 'Berangkat',
@@ -169,6 +170,31 @@ const PengaturanKeberangkatan = () => {
     fetchDrivers();
   }, []);
 
+  // Auto isi jenis/kode kendaraan saat driver dipilih (dari Data Driver/Admin/Mitra)
+  useEffect(() => {
+    const name = formData.driverName || '';
+    if (!name) return;
+    const lc = name.toLowerCase().trim();
+    const found = (drivers || []).find((d) => String(d.name || '').toLowerCase().trim() === lc);
+    if (!found) return;
+
+    setFormData((prev) => {
+      let changed = false;
+      const next = { ...prev };
+
+      if (found.vehicleAssigned && (!prev.vehicleCode || prev.vehicleCode === '-')) {
+        next.vehicleCode = found.vehicleAssigned;
+        changed = true;
+      }
+      if (found.vehicleType && prev.vehicleType !== found.vehicleType) {
+        next.vehicleType = found.vehicleType;
+        changed = true;
+      }
+
+      return changed ? next : prev;
+    });
+  }, [drivers, formData.driverName]);
+
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -214,6 +240,7 @@ const PengaturanKeberangkatan = () => {
       serviceType: 'Reguler',
       driverName: '',
       vehicleCode: '',
+      vehicleType: '',
       suratJalanFile: '',
       suratJalanFileName: '',
       departureStatus: 'Berangkat',
@@ -233,6 +260,7 @@ const PengaturanKeberangkatan = () => {
       serviceType: item.serviceType || 'Reguler',
       driverName: item.driverName || '',
       vehicleCode: item.vehicleCode || '',
+      vehicleType: item.vehicleType || '',
       suratJalanFile: item.suratJalanFile || '',
       suratJalanFileName: item.suratJalanFileName || '',
       departureStatus: item.departureStatus || 'Berangkat',
@@ -459,15 +487,25 @@ const PengaturanKeberangkatan = () => {
     }
   };
 
+  const findDriverVehicleType = (driverName) => {
+    const lc = String(driverName || '').toLowerCase().trim();
+    if (!lc) return '';
+    const found = (drivers || []).find((d) => String(d.name || '').toLowerCase().trim() === lc);
+    return found?.vehicleType || '';
+  };
+
   const filteredItems = items.filter((item) => {
     if (!searchText) return true;
     const q = searchText.toLowerCase();
+    const driverVehicleType = item.vehicleType || findDriverVehicleType(item.driverName);
     return (
       (item.bookingName || '').toLowerCase().includes(q) ||
       (item.phone || '').toLowerCase().includes(q) ||
       (item.pickupAddress || '').toLowerCase().includes(q) ||
       (item.driverName || '').toLowerCase().includes(q) ||
-      (item.vehicleCode || '').toLowerCase().includes(q)
+      (item.vehicleCode || '').toLowerCase().includes(q) ||
+      (item.vehicleType || '').toLowerCase().includes(q) ||
+      (driverVehicleType || '').toLowerCase().includes(q)
     );
   });
 
@@ -679,6 +717,9 @@ const PengaturanKeberangkatan = () => {
                     Driver & Unit
                   </th>
                   <th className="text-left py-3 px-6 text-xs text-gray-400 uppercase">
+                    Jenis Kendaraan
+                  </th>
+                  <th className="text-left py-3 px-6 text-xs text-gray-400 uppercase">
                     E-Surat Jalan
                   </th>
                   <th className="text-left py-3 px-6 text-xs text-gray-400 uppercase">
@@ -692,13 +733,13 @@ const PengaturanKeberangkatan = () => {
               <tbody className="divide-y divide-gray-800">
                 {loading ? (
                   <tr>
-                    <td colSpan={10} className="py-8 text-center text-gray-500 text-sm">
+                    <td colSpan={11} className="py-8 text-center text-gray-500 text-sm">
                       Loading...
                     </td>
                   </tr>
                 ) : filteredItems.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="py-8 text-center text-gray-500 text-sm">
+                    <td colSpan={11} className="py-8 text-center text-gray-500 text-sm">
                       Tidak ada data
                     </td>
                   </tr>
@@ -765,6 +806,12 @@ const PengaturanKeberangkatan = () => {
                               <Car className="w-3 h-3 text-sky-400" />
                               <span>{item.vehicleCode || '-'}</span>
                             </div>
+                          </div>
+                        </td>
+                        <td className="py-3 px-6 text-sm text-gray-200">
+                          <div className="flex items-center gap-1 text-xs">
+                            <Car className="w-3 h-3 text-purple-400" />
+                            <span>{item.vehicleType || findDriverVehicleType(item.driverName) || '-'}</span>
                           </div>
                         </td>
                         <td className="py-3 px-6 text-sm text-gray-200">
@@ -939,19 +986,29 @@ const PengaturanKeberangkatan = () => {
                     value={formData.driverName}
                     onChange={(e) => {
                       const v = e.target.value;
-                      setFormData((prev) => ({ ...prev, driverName: v }));
-                      // OPTIONAL: kalau driver punya vehicleAssigned, isi otomatis jika vehicleCode masih kosong
-                      const found = (drivers || []).find((d) => String(d.name) === String(v));
-                      if (found && found.vehicleAssigned && !formData.vehicleCode) {
-                        setFormData((prev) => ({ ...prev, vehicleCode: found.vehicleAssigned }));
-                      }
+                      const vLc = v.toLowerCase().trim();
+                      const found = (drivers || []).find(
+                        (d) => String(d.name || '').toLowerCase().trim() === vLc
+                      );
+                      setFormData((prev) => ({
+                        ...prev,
+                        driverName: v,
+                        vehicleCode:
+                          found && found.vehicleAssigned
+                            ? found.vehicleAssigned
+                            : prev.vehicleCode,
+                        vehicleType: found ? found.vehicleType || '' : '',
+                      }));
                     }}
                     className="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-sm"
                   >
                     <option value="">-- Pilih Driver --</option>
                     {(drivers || []).map((d) => (
                       <option key={d.id} value={d.name}>
-                        {d.name}{d.role ? ` (${d.role})` : ''}
+                        {d.name}
+                        {d.role ? ` (${d.role})` : ''}
+                        {d.vehicleType ? ` - ${d.vehicleType}` : ''}
+                        {d.vehicleAssigned ? ` [${d.vehicleAssigned}]` : ''}
                       </option>
                     ))}
                   </select>
@@ -971,14 +1028,29 @@ const PengaturanKeberangkatan = () => {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Kode Kendaraan</Label>
-                  <Input
-                    name="vehicleCode"
-                    value={formData.vehicleCode}
-                    onChange={handleChange}
-                    className="bg-slate-800 border-slate-600"
-                    placeholder="Unit-01 / BK 1234 XX"
-                  />
+                  <div className="space-y-2">
+                    <Label>Kode Kendaraan</Label>
+                    <Input
+                      name="vehicleCode"
+                      value={formData.vehicleCode}
+                      onChange={handleChange}
+                      className="bg-slate-800 border-slate-600"
+                      placeholder="Unit-01 / BK 1234 XX"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Jenis Kendaraan</Label>
+                    <Input
+                      name="vehicleType"
+                      value={formData.vehicleType}
+                      readOnly
+                      className="bg-slate-800 border-slate-600"
+                      placeholder="Auto dari data driver (edit di Data Driver/Admin/Mitra)"
+                    />
+                    <div className="text-xs text-gray-500">
+                      Diisi otomatis dari data driver. Ubah jenis kendaraan lewat menu Data Driver/Admin/Mitra.
+                    </div>
+                  </div>
                 </div>
               </div>
 

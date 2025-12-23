@@ -29,6 +29,7 @@ import { useToast } from '@/components/ui/use-toast';
 
 const API_BASE = 'http://localhost:8080/api';
 const DRIVER_ACCOUNT_API = `${API_BASE}/driver-accounts`;
+const DRIVERS_API = `${API_BASE}/drivers`;
 
 const AkunDriver = () => {
   const { toast } = useToast();
@@ -39,9 +40,11 @@ const AkunDriver = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [searchText, setSearchText] = useState('');
+  const [drivers, setDrivers] = useState([]);
 
   const [formData, setFormData] = useState({
     driverName: '',
+    vehicleType: '',
     bookingName: '',
     phone: '',
     pickupAddress: '',
@@ -78,6 +81,30 @@ const AkunDriver = () => {
     fetchData();
   }, [toast]);
 
+  // Load data driver (untuk fallback jenis kendaraan)
+  useEffect(() => {
+    const fetchDrivers = async () => {
+      try {
+        const res = await fetch(DRIVERS_API);
+        if (!res.ok) return;
+        const data = await res.json();
+        setDrivers(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    fetchDrivers();
+  }, []);
+
+  const findDriverVehicleType = (name) => {
+    const lc = String(name || '').toLowerCase().trim();
+    if (!lc) return '';
+    const found = (drivers || []).find(
+      (d) => String(d.name || '').toLowerCase().trim() === lc
+    );
+    return found?.vehicleType || '';
+  };
+
   const reload = async () => {
     try {
       const res = await fetch(DRIVER_ACCOUNT_API);
@@ -93,6 +120,7 @@ const AkunDriver = () => {
     setEditingItem(null);
     setFormData({
       driverName: '',
+      vehicleType: '',
       bookingName: '',
       phone: '',
       pickupAddress: '',
@@ -111,6 +139,7 @@ const AkunDriver = () => {
     setEditingItem(item);
     setFormData({
       driverName: item.driverName || '',
+      vehicleType: item.vehicleType || findDriverVehicleType(item.driverName) || '',
       bookingName: item.bookingName || '',
       phone: item.phone || '',
       pickupAddress: item.pickupAddress || '',
@@ -193,8 +222,11 @@ const AkunDriver = () => {
   const filteredItems = items.filter((item) => {
     if (!searchText) return true;
     const q = searchText.toLowerCase();
+    const vt = item.vehicleType || findDriverVehicleType(item.driverName);
     return (
       (item.driverName || '').toLowerCase().includes(q) ||
+      (item.vehicleType || '').toLowerCase().includes(q) ||
+      (vt || '').toLowerCase().includes(q) ||
       (item.bookingName || '').toLowerCase().includes(q) ||
       (item.phone || '').toLowerCase().includes(q) ||
       (item.pickupAddress || '').toLowerCase().includes(q)
@@ -249,6 +281,9 @@ const AkunDriver = () => {
                     Driver
                   </th>
                   <th className="text-left py-3 px-6 text-xs text-gray-400 uppercase">
+                    Jenis Kendaraan
+                  </th>
+                  <th className="text-left py-3 px-6 text-xs text-gray-400 uppercase">
                     Pemesan
                   </th>
                   <th className="text-left py-3 px-6 text-xs text-gray-400 uppercase">
@@ -275,7 +310,7 @@ const AkunDriver = () => {
                 {loading ? (
                   <tr>
                     <td
-                      colSpan={8}
+                      colSpan={9}
                       className="py-8 text-center text-gray-500 text-sm"
                     >
                       Loading...
@@ -284,7 +319,7 @@ const AkunDriver = () => {
                 ) : filteredItems.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={8}
+                      colSpan={9}
                       className="py-8 text-center text-gray-500 text-sm"
                     >
                       Tidak ada data
@@ -311,6 +346,9 @@ const AkunDriver = () => {
                             />
                             <span>{item.driverName}</span>
                           </div>
+                        </td>
+                        <td className="py-3 px-6 text-sm text-gray-100">
+                          {item.vehicleType || findDriverVehicleType(item.driverName) || '-'}
                         </td>
                         <td className="py-3 px-6 text-sm text-gray-100">
                           {item.bookingName}
@@ -432,6 +470,19 @@ const AkunDriver = () => {
                   className="bg-slate-800 border-slate-600"
                   required
                 />
+              </div>
+              <div className="space-y-2">
+                <Label>Jenis Kendaraan</Label>
+                <Input
+                  name="vehicleType"
+                  value={formData.vehicleType || findDriverVehicleType(formData.driverName)}
+                  readOnly
+                  className="bg-slate-800 border-slate-600"
+                  placeholder="Auto dari Pengaturan Keberangkatan"
+                />
+                <div className="text-xs text-gray-500">
+                  Diisi otomatis dari Pengaturan Keberangkatan / data driver.
+                </div>
               </div>
               <div className="space-y-2">
                 <Label>Nama Pemesanan</Label>

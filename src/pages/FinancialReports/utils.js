@@ -43,10 +43,15 @@ export function getMonthName(idx) {
   const n = toNumber(idx);
   if (!Number.isFinite(n)) return '-';
 
-  // allow 1..12 -> 0..11
-  const zeroBased = n >= 1 && n <= 12 ? n - 1 : n;
+  // handle zero-based (0..11) and one-based (1..12) gracefully
+  let zeroBased = -1;
+  if (n >= 0 && n <= 11) {
+    zeroBased = n;
+  } else if (n >= 1 && n <= 12) {
+    zeroBased = n - 1;
+  }
 
-  return MONTHS_ID[zeroBased] || '-';
+  return zeroBased >= 0 && zeroBased < MONTHS_ID.length ? MONTHS_ID[zeroBased] : '-';
 }
 
 export function monthShort(idx) {

@@ -13,6 +13,9 @@ import CrudActions from '@/components/CrudActions';
 const ITEMS_PER_PAGE = 9;
 const API_BASE = 'http://localhost:8080/api';
 
+// ✅ Tambahan jenis kendaraan untuk driver
+const VEHICLE_OPTIONS = ['Innova Reborn', 'Hiace'];
+
 const DriverInfo = () => {
   const { toast } = useToast();
   const [drivers, setDrivers] = useState([]);
@@ -115,7 +118,7 @@ const DriverInfo = () => {
 
       const updatedDriver = {
         ...driver,
-        photo: base64, // pastikan backend & DB ada kolom `photo`
+        photo: base64,
       };
 
       try {
@@ -129,7 +132,6 @@ const DriverInfo = () => {
           throw new Error(result.error || 'Gagal mengupdate foto driver');
         }
 
-        // update state lokal pakai response backend
         setDrivers((prev) =>
           prev.map((d) => (d.id === driver.id ? result : d)),
         );
@@ -225,6 +227,13 @@ const DriverInfo = () => {
     setSearchText(searchInput.trim());
   };
 
+  // ✅ helper: bikin label "Innova Reborn • LK 03"
+  const buildVehicleLabel = (driver) => {
+    const type = (driver?.vehicleType || '').trim();
+    const assigned = (driver?.vehicleAssigned || '').trim();
+    return [type, assigned].filter(Boolean).join(' • ');
+  };
+
   return (
     <DashboardLayout>
       <Helmet>
@@ -287,80 +296,85 @@ const DriverInfo = () => {
 
         {/* Cards list */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {currentPageDrivers.map((driver, index) => (
-            <motion.div
-              key={driver.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: index * 0.05 }}
-              whileHover={{ y: -5 }}
-              className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-gray-700 hover:border-yellow-500/50 transition-all shadow-lg group"
-            >
-              <div className="flex items-start justify-between mb-6">
-                {/* Avatar + upload foto */}
-                <label className="relative cursor-pointer">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => handleAvatarChange(e, driver)}
-                  />
-                  <div className="w-14 h-14 bg-gradient-to-br from-yellow-500 to-yellow-600 rounded-2xl flex items-center justify-center shadow-lg shadow-yellow-500/20 transform -rotate-3 group-hover:rotate-0 transition-transform overflow-hidden">
-                    {driver.photo ? (
-                      <img
-                        src={driver.photo}
-                        alt={driver.name}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <UserCheck className="w-7 h-7 text-white" />
-                    )}
-                  </div>
-                  <div className="absolute -bottom-2 -right-2 bg-slate-900 rounded-full p-1 border border-gray-700">
-                    <ShieldCheck className="w-4 h-4 text-green-400" />
-                  </div>
-                </label>
+          {currentPageDrivers.map((driver, index) => {
+            const vehicleLabel = buildVehicleLabel(driver);
 
-                <div className="opacity-80 group-hover:opacity-100 transition-opacity">
-                  <CrudActions
-                    itemName="Member"
-                    onView={() => handleView(driver)}
-                    onEdit={() => handleEdit(driver)}
-                    onDelete={() => handleDelete(driver.id)}
-                  />
-                </div>
-              </div>
+            return (
+              <motion.div
+                key={driver.id}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: index * 0.05 }}
+                whileHover={{ y: -5 }}
+                className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-gray-700 hover:border-yellow-500/50 transition-all shadow-lg group"
+              >
+                <div className="flex items-start justify-between mb-6">
+                  {/* Avatar + upload foto */}
+                  <label className="relative cursor-pointer">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => handleAvatarChange(e, driver)}
+                    />
+                    <div className="w-14 h-14 bg-gradient-to-br from-yellow-500 to-yellow-600 rounded-2xl flex items-center justify-center shadow-lg shadow-yellow-500/20 transform -rotate-3 group-hover:rotate-0 transition-transform overflow-hidden">
+                      {driver.photo ? (
+                        <img
+                          src={driver.photo}
+                          alt={driver.name}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <UserCheck className="w-7 h-7 text-white" />
+                      )}
+                    </div>
+                    <div className="absolute -bottom-2 -right-2 bg-slate-900 rounded-full p-1 border border-gray-700">
+                      <ShieldCheck className="w-4 h-4 text-green-400" />
+                    </div>
+                  </label>
 
-              <div className="mb-4">
-                <h3 className="text-xl font-bold text-white mb-1 group-hover:text-yellow-400 transition-colors">
-                  {driver.name}
-                </h3>
-                <span className="inline-block px-2 py-1 rounded text-xs font-semibold bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 uppercase tracking-wide">
-                  {driver.role}
-                </span>
-              </div>
-
-              <div className="space-y-3 pt-4 border-t border-gray-700/50">
-                <div className="flex items-center gap-3 text-gray-400 group-hover:text-gray-300 transition-colors">
-                  <div className="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center">
-                    <Phone className="w-4 h-4" />
+                  <div className="opacity-80 group-hover:opacity-100 transition-opacity">
+                    <CrudActions
+                      itemName="Member"
+                      onView={() => handleView(driver)}
+                      onEdit={() => handleEdit(driver)}
+                      onDelete={() => handleDelete(driver.id)}
+                    />
                   </div>
-                  <span className="font-mono text-sm">{driver.phone}</span>
                 </div>
 
-                {driver.vehicleAssigned && (
+                <div className="mb-4">
+                  <h3 className="text-xl font-bold text-white mb-1 group-hover:text-yellow-400 transition-colors">
+                    {driver.name}
+                  </h3>
+                  <span className="inline-block px-2 py-1 rounded text-xs font-semibold bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 uppercase tracking-wide">
+                    {driver.role}
+                  </span>
+                </div>
+
+                <div className="space-y-3 pt-4 border-t border-gray-700/50">
                   <div className="flex items-center gap-3 text-gray-400 group-hover:text-gray-300 transition-colors">
                     <div className="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center">
-                      <Car className="w-4 h-4" />
+                      <Phone className="w-4 h-4" />
                     </div>
-                    <span className="font-mono text-sm">
-                      {driver.vehicleAssigned}
-                    </span>
+                    <span className="font-mono text-sm">{driver.phone}</span>
                   </div>
-                )}
-              </div>
-            </motion.div>
-          ))}
+
+                  {/* ✅ Kendaraan: VehicleType • VehicleAssigned */}
+                  {(driver.vehicleType || driver.vehicleAssigned) && (
+                    <div className="flex items-center gap-3 text-gray-400 group-hover:text-gray-300 transition-colors">
+                      <div className="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center">
+                        <Car className="w-4 h-4" />
+                      </div>
+                      <span className="font-mono text-sm">
+                        {vehicleLabel}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            );
+          })}
         </div>
 
         {/* Empty state */}
@@ -429,6 +443,8 @@ const DriverInfo = () => {
         onSave={handleSave}
         driver={editingDriver}
         saving={saving}
+        vehicleOptions={VEHICLE_OPTIONS}
+        vehicleTypes={VEHICLE_OPTIONS}
       />
     </DashboardLayout>
   );

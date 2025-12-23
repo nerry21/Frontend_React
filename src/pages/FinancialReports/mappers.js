@@ -3,8 +3,10 @@ import { isReguler, toNumber } from './utils';
 
 function normalizeMonthToUiZeroBased(m) {
   const n = toNumber(m);
-  if (n >= 1 && n <= 12) return n - 1; // 1..12 -> 0..11
-  if (n >= 0 && n <= 11) return n; // already 0..11
+  // jika backend kirim 0..11 (zero-based), pakai langsung
+  if (n >= 0 && n <= 11) return n;
+  // jika backend kirim 1..12 (one-based), ubah ke 0..11
+  if (n >= 1 && n <= 12) return n - 1;
   return 0;
 }
 
