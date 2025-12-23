@@ -27,9 +27,10 @@ import { useToast } from '@/components/ui/use-toast';
 
 const API_BASE = 'http://localhost:8080/api';
 const DEPARTURE_API = `${API_BASE}/departure-settings`;
+const DRIVERS_API = `${API_BASE}/drivers`;
 
 // ==============================
-// ✅ NEW Helpers (tidak menghapus kode lama)
+// ✅ Helpers (tanpa menghapus kode lama)
 // - suratJalanFile bisa:
 //   1) data:image/... (upload manual)
 //   2) URL absolut (http/https)
@@ -54,10 +55,45 @@ function resolveToAbsoluteBackendUrl(v) {
   // fallback: sudah berupa path tanpa leading slash
   return `${BACKEND_ORIGIN}/${v}`;
 }
+
+// ✅ paksa scope=trip untuk endpoint booking surat jalan (fallback lama)
+function ensureSuratJalanTripScope(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return rawUrl;
+
+  const u = rawUrl.trim();
+  const isBookingSJ = u.includes('/api/reguler/bookings/') && u.includes('/surat-jalan');
+  if (!isBookingSJ) return rawUrl;
+  if (u.includes('scope=trip')) return rawUrl;
+
+  const joiner = u.includes('?') ? '&' : '?';
+  return `${u}${joiner}scope=trip`;
+}
+
+function formatDateID(dateString) {
+  if (!dateString) return '';
+  const d = new Date(dateString);
+  if (Number.isNaN(d.getTime())) return String(dateString);
+  return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
 function looksLikePdf(v) {
   if (!v || typeof v !== 'string') return false;
   if (v.startsWith('data:application/pdf')) return true;
   return v.toLowerCase().includes('.pdf');
+}
+
+// ✅ NEW: deteksi content-type
+function isPdfContentType(ct) {
+  const s = String(ct || '').toLowerCase();
+  return s.includes('application/pdf');
+}
+function isImageContentType(ct) {
+  const s = String(ct || '').toLowerCase();
+  return s.startsWith('image/');
+}
+function isJsonContentType(ct) {
+  const s = String(ct || '').toLowerCase();
+  return s.includes('application/json') || s.includes('text/json');
 }
 
 const PengaturanKeberangkatan = () => {
@@ -90,6 +126,48 @@ const PengaturanKeberangkatan = () => {
   const [isSuratPreviewOpen, setIsSuratPreviewOpen] = useState(false);
   const [suratPreviewSrc, setSuratPreviewSrc] = useState('');
   const [suratPreviewIsPdf, setSuratPreviewIsPdf] = useState(false);
+
+  // ✅ Preview surat jalan JSON (fallback lama)
+  const [suratPreviewIsJson, setSuratPreviewIsJson] = useState(false);
+  const [suratPreviewJson, setSuratPreviewJson] = useState(null);
+  const [suratPreviewLoading, setSuratPreviewLoading] = useState(false);
+  const [suratPreviewError, setSuratPreviewError] = useState('');
+
+  // ✅ Drivers dropdown (/api/drivers)
+  const [drivers, setDrivers] = useState([]);
+  const [driversLoading, setDriversLoading] = useState(false);
+
+  // ✅ NEW: blob url untuk preview file asli (supaya tampil seperti Informasi 10)
+  const [suratPreviewBlobUrl, setSuratPreviewBlobUrl] = useState('');
+
+  // cleanup blob url
+  useEffect(() => {
+    return () => {
+      if (suratPreviewBlobUrl) {
+        try {
+          URL.revokeObjectURL(suratPreviewBlobUrl);
+        } catch (_) {}
+      }
+    };
+  }, [suratPreviewBlobUrl]);
+
+  useEffect(() => {
+    const fetchDrivers = async () => {
+      try {
+        setDriversLoading(true);
+        const res = await fetch(DRIVERS_API);
+        if (!res.ok) throw new Error('Gagal mengambil data driver');
+        const data = await res.json();
+        setDrivers(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error(err);
+        // tidak perlu toast keras, biar halaman tetap bisa dipakai
+      } finally {
+        setDriversLoading(false);
+      }
+    };
+    fetchDrivers();
+  }, []);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -201,19 +279,150 @@ const PengaturanKeberangkatan = () => {
     reader.readAsDataURL(file);
   };
 
-  // ✅ open preview e-surat jalan (img/pdf) di modal
-  const openSuratPreview = (item) => {
+  // ✅ open preview legacy: langsung pakai src (data-url/pdf/url)
+  const openSuratPreviewLegacy = (item) => {
     const raw = item?.suratJalanFile || '';
     if (!raw) return;
-    const abs = resolveToAbsoluteBackendUrl(raw);
+
+    // reset state
+    setSuratPreviewError('');
+    setSuratPreviewIsJson(false);
+    setSuratPreviewJson(null);
+    setSuratPreviewLoading(false);
+
+    // cleanup blob url lama
+    if (suratPreviewBlobUrl) {
+      try {
+        URL.revokeObjectURL(suratPreviewBlobUrl);
+      } catch (_) {}
+      setSuratPreviewBlobUrl('');
+    }
+
+    const abs = ensureSuratJalanTripScope(resolveToAbsoluteBackendUrl(raw));
     setSuratPreviewSrc(abs);
     setSuratPreviewIsPdf(looksLikePdf(abs));
     setIsSuratPreviewOpen(true);
   };
 
+  // ✅ open preview utama (Informasi 10 style):
+  // - Prioritas: tampilkan FILE asli (PDF/IMG) via blob URL (Accept: pdf/image).
+  // - Jika server balas JSON {__type:"image", src:"data:image/..."} -> tampilkan src langsung.
+  // - Jika JSON booking -> fallback template lama (Informasi 9).
+  const openSuratPreview = async (item) => {
+    const raw = item?.suratJalanFile || '';
+    if (!raw) return;
+
+    // reset state
+    setSuratPreviewError('');
+    setSuratPreviewIsJson(false);
+    setSuratPreviewJson(null);
+    setSuratPreviewLoading(false);
+    setSuratPreviewIsPdf(false);
+    setSuratPreviewSrc('');
+
+    // cleanup blob url lama
+    if (suratPreviewBlobUrl) {
+      try {
+        URL.revokeObjectURL(suratPreviewBlobUrl);
+      } catch (_) {}
+      setSuratPreviewBlobUrl('');
+    }
+
+    // resolve URL
+    let abs = resolveToAbsoluteBackendUrl(raw);
+    abs = ensureSuratJalanTripScope(abs);
+
+    // kalau data URL / pdf -> pakai legacy
+    if (isDataUrl(abs) || looksLikePdf(abs)) {
+      openSuratPreviewLegacy({ ...item, suratJalanFile: abs });
+      return;
+    }
+
+    try {
+      setSuratPreviewLoading(true);
+
+      // ✅ minta PDF/IMG dulu agar hasil preview seperti Informasi 10
+      const res = await fetch(abs, {
+        headers: {
+          Accept:
+            'application/pdf,image/*;q=0.9,application/octet-stream;q=0.8,application/json;q=0.6,*/*;q=0.5',
+        },
+      });
+
+      if (!res.ok) {
+        throw new Error(`Gagal membuka surat jalan (${res.status})`);
+      }
+
+      const contentType = (res.headers.get('content-type') || '').toLowerCase();
+
+      // Jika JSON -> cek apakah wrapper image dari trip_information
+      if (isJsonContentType(contentType)) {
+        const data = await res.json().catch(() => null);
+
+        // ✅ Trip Information surat jalan biasanya balas:
+        // { "__type":"image", "src":"data:image/..." }
+        if (data && data.__type === 'image' && data.src) {
+          setSuratPreviewIsJson(false);
+          setSuratPreviewJson(null);
+          setSuratPreviewSrc(data.src);
+          setSuratPreviewIsPdf(false);
+          setIsSuratPreviewOpen(true);
+          return;
+        }
+
+        // fallback JSON lama (template Informasi 9)
+        if (data) {
+          setSuratPreviewIsJson(true);
+          setSuratPreviewJson(data);
+          setSuratPreviewSrc(abs); // untuk tombol Open
+          setSuratPreviewIsPdf(false);
+          setIsSuratPreviewOpen(true);
+          return;
+        }
+      }
+
+      // Selain JSON -> anggap file (pdf/image), buat blob url
+      const blob = await res.blob();
+      const blobCt = (blob.type || contentType || '').toLowerCase();
+      const objUrl = URL.createObjectURL(blob);
+
+      setSuratPreviewBlobUrl(objUrl);
+      setSuratPreviewSrc(objUrl);
+
+      if (isPdfContentType(blobCt) || isPdfContentType(contentType)) {
+        setSuratPreviewIsPdf(true);
+      } else if (isImageContentType(blobCt) || isImageContentType(contentType)) {
+        setSuratPreviewIsPdf(false);
+      } else {
+        // heuristik
+        setSuratPreviewIsPdf(looksLikePdf(abs));
+      }
+
+      setIsSuratPreviewOpen(true);
+    } catch (err) {
+      console.error(err);
+      setSuratPreviewError(err?.message || 'Gagal membuka E-Surat Jalan');
+
+      // fallback legacy
+      openSuratPreviewLegacy({ ...item, suratJalanFile: abs });
+    } finally {
+      setSuratPreviewLoading(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSaving(true);
+
+    if (!formData.driverName.trim()) {
+      toast({
+        title: 'Nama driver wajib diisi',
+        description: 'Pilih driver atau isi manual sebelum menyimpan.',
+        variant: 'destructive',
+      });
+      setSaving(false);
+      return;
+    }
 
     const payload = { ...formData };
 
@@ -261,6 +470,148 @@ const PengaturanKeberangkatan = () => {
       (item.vehicleCode || '').toLowerCase().includes(q)
     );
   });
+
+  // Render surat jalan JSON (selaras dengan Informasi Perjalanan)
+  const renderSuratJalanJson = (payload) => {
+    const pick = (obj, keys, def = '') => {
+      for (const k of keys) {
+        const v = obj && obj[k];
+        if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+      }
+      return def;
+    };
+
+    const passengerCandidates = [
+      payload?.passengers,
+      payload?.penumpang,
+      payload?.rows,
+      payload?.items,
+      payload?.data?.passengers,
+      payload?.data?.penumpang,
+      payload?.data?.rows,
+      payload?.data?.items,
+    ];
+    const rows = passengerCandidates.find((x) => Array.isArray(x)) || [];
+    const rowCount = Math.max(7, rows.length);
+
+    const header = {
+      company:
+        pick(payload, ['companyName', 'company', 'namaPerusahaan'], '') ||
+        'PT. LANCANG KUNING TRAVELINDO',
+      title: pick(payload, ['title', 'judul'], 'SURAT JALAN'),
+      licensePlate: pick(payload, ['licensePlate', 'noPol', 'plate'], ''),
+      tripDate: pick(payload, ['tripDate', 'departureDate', 'date', 'tanggal'], ''),
+      driver: pick(payload, ['driverName', 'driver', 'supir'], ''),
+    };
+    const formattedTripDate = formatDateID(header.tripDate);
+
+    const normRow = (r) => ({
+      name: pick(r, ['name', 'passengerName', 'nama'], '-'),
+      phone: pick(r, ['phone', 'passengerPhone', 'noHp', 'hp'], ''),
+      seat: pick(r, ['seat', 'seatCode', 'selectedSeat', 'selectedSeats', 'bangku'], ''),
+      pickup: pick(r, ['pickup', 'jemput', 'pickupLocation', 'pickupAddress'], '-'),
+      dest: pick(r, ['destination', 'tujuan', 'dropoffLocation', 'dropoffAddress'], '-'),
+      fare: pick(r, ['fare', 'tarif', 'price', 'amount', 'totalAmount', 'pricePerSeat'], ''),
+      status: pick(r, ['status', 'keterangan', 'paymentStatus'], ''),
+    });
+
+    return (
+      <div className="w-full bg-white text-black p-6 rounded-md shadow">
+        <div className="flex items-start justify-between mb-6">
+          <div className="flex items-center gap-4">
+            <div className="w-16 h-16 border-2 border-black rounded-full flex items-center justify-center overflow-hidden bg-white">
+              <img
+                src="https://horizons-cdn.hostinger.com/aa3a21e0-4488-4247-a025-83814179d1a2/c29b7033714ce9b851a1fd1b040f6cfb.jpg"
+                alt="Logo"
+                className="w-full h-full object-contain"
+              />
+            </div>
+            <div>
+              <div className="text-2xl font-black uppercase tracking-tight leading-tight">
+                {header.company}
+              </div>
+              <div className="text-xl font-bold uppercase tracking-wide">SURAT JALAN</div>
+            </div>
+          </div>
+
+          <div className="text-right text-sm font-bold space-y-1 min-w-[220px]">
+            <div className="flex justify-between items-center border-b border-black border-dashed pb-1">
+              <span>No. Pol :</span>
+              <span className="font-mono ml-2">{header.licensePlate || '..............'}</span>
+            </div>
+            <div className="flex justify-between items-center border-b border-black border-dashed pb-1">
+              <span>Tanggal :</span>
+              <span className="font-mono ml-2">{formattedTripDate || '..............'}</span>
+            </div>
+            <div className="flex justify-between items-center border-b border-black border-dashed pb-1">
+              <span>Driver :</span>
+              <span className="font-mono ml-2">{header.driver || '..............'}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="w-full mb-10 border-2 border-black">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="border-b-2 border-black">
+                <th className="border-r border-black p-2 w-10 text-center font-bold uppercase">No.</th>
+                <th className="border-r border-black p-2 text-left font-bold uppercase">Nama / Nomor HP</th>
+                <th className="border-r border-black p-2 text-left font-bold uppercase w-1/5">Jemput</th>
+                <th className="border-r border-black p-2 text-left font-bold uppercase w-1/5">Tujuan</th>
+                <th className="border-r border-black p-2 text-center font-bold uppercase w-24">Tarif</th>
+                <th className="p-2 text-center font-bold uppercase w-28">Keterangan</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-black">
+              {Array.from({ length: rowCount }, (_, i) => {
+                const r = rows[i];
+                const hasData = !!r;
+                const rr = hasData ? normRow(r) : null;
+                return (
+                  <tr key={i} className="h-10">
+                    <td className="border-r border-black p-2 text-center font-bold">{i + 1}</td>
+                    <td className="border-r border-black p-2 font-bold uppercase">
+                      {hasData ? (
+                        <>
+                          {rr.name}
+                          {rr.seat ? <span className="font-normal text-xs"> ({rr.seat})</span> : null}
+                          <br />
+                          {rr.phone ? <span className="font-normal text-xs">{rr.phone}</span> : null}
+                        </>
+                      ) : null}
+                    </td>
+                    <td className="border-r border-black p-2 uppercase text-xs font-semibold">
+                      {hasData ? rr.pickup : ''}
+                    </td>
+                    <td className="border-r border-black p-2 uppercase text-xs font-semibold">
+                      {hasData ? rr.dest : ''}
+                    </td>
+                    <td className="border-r border-black p-2 text-right">
+                      {hasData ? (rr.fare ? rr.fare : '') : ''}
+                    </td>
+                    <td className="p-2 text-center text-[10px] font-bold">
+                      {hasData ? (rr.status ? rr.status : '') : ''}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="flex justify-between px-12 text-center text-sm font-bold uppercase">
+          <div className="flex flex-col gap-16">
+            <span>Pengemudi</span>
+            <span className="border-t border-black pt-1 px-4 min-w-[150px]">(.........................)</span>
+          </div>
+          <div className="flex flex-col gap-16">
+            <span>Pengurus</span>
+            <span className="border-t border-black pt-1 px-4 min-w-[150px]">(.........................)</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <DashboardLayout>
@@ -341,152 +692,150 @@ const PengaturanKeberangkatan = () => {
               <tbody className="divide-y divide-gray-800">
                 {loading ? (
                   <tr>
-                    <td
-                      colSpan={10}
-                      className="py-8 text-center text-gray-500 text-sm"
-                    >
+                    <td colSpan={10} className="py-8 text-center text-gray-500 text-sm">
                       Loading...
                     </td>
                   </tr>
                 ) : filteredItems.length === 0 ? (
                   <tr>
-                    <td
-                      colSpan={10}
-                      className="py-8 text-center text-gray-500 text-sm"
-                    >
+                    <td colSpan={10} className="py-8 text-center text-gray-500 text-sm">
                       Tidak ada data
                     </td>
                   </tr>
                 ) : (
-                  filteredItems.map((item) => (
-                    <motion.tr
-                      key={item.id}
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      className="hover:bg-slate-700/30"
-                    >
-                      <td className="py-3 px-6 text-sm text-gray-100">
-                        <div className="flex items-center gap-2">
-                          <Users className="w-3 h-3 text-yellow-400" />
-                          <span>{item.bookingName}</span>
-                        </div>
-                      </td>
-                      <td className="py-3 px-6 text-sm text-gray-200">
-                        <div className="flex items-center gap-1">
-                          <Phone className="w-3 h-3 text-green-400" />
-                          <span>{item.phone}</span>
-                        </div>
-                      </td>
-                      <td className="py-3 px-6 text-sm text-gray-300 max-w-xs truncate">
-                        <div className="flex items-center gap-1">
-                          <MapPin className="w-3 h-3 text-red-400" />
-                          <span>{item.pickupAddress}</span>
-                        </div>
-                      </td>
-                      <td className="py-3 px-6 text-sm text-gray-200">
-                        <div className="flex items-center gap-1">
-                          <Calendar className="w-3 h-3 text-blue-400" />
-                          <span>{item.departureDate || '-'}</span>
-                        </div>
-                      </td>
-                      <td className="py-3 px-6 text-sm text-gray-200">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-1 text-xs">
-                            <Armchair className="w-3 h-3 text-yellow-400" />
-                            <span>{item.seatNumbers || '-'}</span>
-                          </div>
-                          <div className="text-xs text-gray-400">
-                            {item.passengerCount
-                              ? `${item.passengerCount} Penumpang/Barang`
-                              : '-'}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-3 px-6 text-sm text-gray-200">
-                        {item.serviceType}
-                      </td>
-                      <td className="py-3 px-6 text-sm text-gray-200">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-1 text-xs">
-                            <Users className="w-3 h-3 text-emerald-400" />
-                            <span>{item.driverName || '-'}</span>
-                          </div>
-                          <div className="flex items-center gap-1 text-xs">
-                            <Car className="w-3 h-3 text-sky-400" />
-                            <span>{item.vehicleCode || '-'}</span>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-3 px-6 text-sm text-gray-200">
-                        {hasSuratJalan(item.suratJalanFile) ? (
-                          <div className="flex items-center gap-2">
-                            <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
-                              <Upload className="w-3 h-3" /> Uploaded
-                            </span>
+                  filteredItems.map((item) => {
+                    const openHref = ensureSuratJalanTripScope(
+                      resolveToAbsoluteBackendUrl(item.suratJalanFile)
+                    );
 
+                    return (
+                      <motion.tr
+                        key={item.id}
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        className="hover:bg-slate-700/30"
+                      >
+                        <td className="py-3 px-6 text-sm text-gray-100">
+                          <div className="flex items-center gap-2">
+                            <Users className="w-3 h-3 text-yellow-400" />
+                            <span>{item.bookingName}</span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-6 text-sm text-gray-200">
+                          <div className="flex items-center gap-1">
+                            <Phone className="w-3 h-3 text-green-400" />
+                            <span>{item.phone}</span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-6 text-sm text-gray-300 max-w-xs truncate">
+                          <div className="flex items-center gap-1">
+                            <MapPin className="w-3 h-3 text-red-400" />
+                            <span>{item.pickupAddress}</span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-6 text-sm text-gray-200">
+                          <div className="flex items-center gap-1">
+                            <Calendar className="w-3 h-3 text-blue-400" />
+                            <span>{item.departureDate || '-'}</span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-6 text-sm text-gray-200">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-1 text-xs">
+                              <Armchair className="w-3 h-3 text-yellow-400" />
+                              <span>{item.seatNumbers || '-'}</span>
+                            </div>
+                            <div className="text-xs text-gray-400">
+                              {item.passengerCount
+                                ? `${item.passengerCount} Penumpang/Barang`
+                                : '-'}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3 px-6 text-sm text-gray-200">
+                          {item.serviceType}
+                        </td>
+                        <td className="py-3 px-6 text-sm text-gray-200">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-1 text-xs">
+                              <Users className="w-3 h-3 text-emerald-400" />
+                              <span>{item.driverName || '-'}</span>
+                            </div>
+                            <div className="flex items-center gap-1 text-xs">
+                              <Car className="w-3 h-3 text-sky-400" />
+                              <span>{item.vehicleCode || '-'}</span>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3 px-6 text-sm text-gray-200">
+                          {hasSuratJalan(item.suratJalanFile) ? (
+                            <div className="flex items-center gap-2">
+                              <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
+                                <Upload className="w-3 h-3" /> Uploaded
+                              </span>
+
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 border-gray-600 text-gray-200"
+                                onClick={() => openSuratPreview(item)}
+                              >
+                                Prev
+                              </Button>
+
+                              {/* link tetap ada (kode lama), tapi sudah dinormalisasi */}
+                              <a
+                                href={openHref}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-xs text-yellow-400 underline"
+                              >
+                                Open
+                              </a>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-500">Belum upload</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-6 text-sm">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold ${
+                              item.departureStatus === 'Berangkat'
+                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/40'
+                                : 'bg-red-500/10 text-red-400 border border-red-500/40'
+                            }`}
+                          >
+                            {item.departureStatus === 'Berangkat' ? (
+                              <CheckCircle className="w-3 h-3" />
+                            ) : (
+                              <XCircle className="w-3 h-3" />
+                            )}
+                            {item.departureStatus}
+                          </span>
+                        </td>
+                        <td className="py-3 px-6 text-right text-sm">
+                          <div className="flex justify-end gap-2">
                             <Button
                               size="sm"
                               variant="outline"
-                              className="h-7 px-2 border-gray-600 text-gray-200"
-                              onClick={() => openSuratPreview(item)}
+                              className="border-gray-600 text-gray-200"
+                              onClick={() => openEdit(item)}
                             >
-                              Prev
+                              Edit
                             </Button>
-
-                            {/* tetap ada link (kode lama) */}
-                            <a
-                              href={resolveToAbsoluteBackendUrl(item.suratJalanFile)}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-xs text-yellow-400 underline"
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-red-500/50 text-red-400 hover:bg-red-500/10"
+                              onClick={() => handleDelete(item.id)}
                             >
-                              Open
-                            </a>
+                              Hapus
+                            </Button>
                           </div>
-                        ) : (
-                          <span className="text-xs text-gray-500">
-                            Belum upload
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-3 px-6 text-sm">
-                        <span
-                          className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold ${
-                            item.departureStatus === 'Berangkat'
-                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/40'
-                              : 'bg-red-500/10 text-red-400 border border-red-500/40'
-                          }`}
-                        >
-                          {item.departureStatus === 'Berangkat' ? (
-                            <CheckCircle className="w-3 h-3" />
-                          ) : (
-                            <XCircle className="w-3 h-3" />
-                          )}
-                          {item.departureStatus}
-                        </span>
-                      </td>
-                      <td className="py-3 px-6 text-right text-sm">
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="border-gray-600 text-gray-200"
-                            onClick={() => openEdit(item)}
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="border-red-500/50 text-red-400 hover:bg-red-500/10"
-                            onClick={() => handleDelete(item.id)}
-                          >
-                            Hapus
-                          </Button>
-                        </div>
-                      </td>
-                    </motion.tr>
-                  ))
+                        </td>
+                      </motion.tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -541,6 +890,7 @@ const PengaturanKeberangkatan = () => {
                   className="bg-slate-800 border-slate-600"
                 />
               </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Tempat Duduk (Seat)</Label>
@@ -563,6 +913,7 @@ const PengaturanKeberangkatan = () => {
                   />
                 </div>
               </div>
+
               <div className="space-y-2">
                 <Label>Jenis Layanan</Label>
                 <select
@@ -577,9 +928,39 @@ const PengaturanKeberangkatan = () => {
                   <option value="Paket Barang">Paket Barang</option>
                 </select>
               </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Driver Info</Label>
+
+                  {/* ✅ Dropdown driver dari /api/drivers (tanpa menghapus input lama) */}
+                  <Label className="mt-1 block">Pilih Driver (Data Driver/Admin/Mitra)</Label>
+                  <select
+                    value={formData.driverName}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setFormData((prev) => ({ ...prev, driverName: v }));
+                      // OPTIONAL: kalau driver punya vehicleAssigned, isi otomatis jika vehicleCode masih kosong
+                      const found = (drivers || []).find((d) => String(d.name) === String(v));
+                      if (found && found.vehicleAssigned && !formData.vehicleCode) {
+                        setFormData((prev) => ({ ...prev, vehicleCode: found.vehicleAssigned }));
+                      }
+                    }}
+                    className="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-sm"
+                  >
+                    <option value="">-- Pilih Driver --</option>
+                    {(drivers || []).map((d) => (
+                      <option key={d.id} value={d.name}>
+                        {d.name}{d.role ? ` (${d.role})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="text-xs text-gray-500">
+                    {driversLoading ? 'Memuat driver...' : 'Jika belum ada driver, tambah di menu Data Driver/Admin/Mitra.'}
+                  </div>
+
+                  {/* ✅ Input lama tetap ada (manual) */}
+                  <Label className="mt-3 block">Driver Info (Manual)</Label>
                   <Input
                     name="driverName"
                     value={formData.driverName}
@@ -588,6 +969,7 @@ const PengaturanKeberangkatan = () => {
                     placeholder="Nama driver"
                   />
                 </div>
+
                 <div className="space-y-2">
                   <Label>Kode Kendaraan</Label>
                   <Input
@@ -599,6 +981,7 @@ const PengaturanKeberangkatan = () => {
                   />
                 </div>
               </div>
+
               <div className="space-y-2">
                 <Label>Foto E-Surat Jalan</Label>
                 <div className="flex items-center gap-3">
@@ -619,6 +1002,7 @@ const PengaturanKeberangkatan = () => {
                   )}
                 </div>
               </div>
+
               <div className="space-y-2">
                 <Label>Status Keberangkatan</Label>
                 <select
@@ -654,16 +1038,27 @@ const PengaturanKeberangkatan = () => {
                       ? 'Saving...'
                       : 'Creating...'
                     : editingItem
-                    ? 'Save Changes'
-                    : 'Create'}
+                      ? 'Save Changes'
+                      : 'Create'}
                 </Button>
               </div>
             </form>
           </DialogContent>
         </Dialog>
 
-        {/* ✅ Preview Modal E-Surat Jalan (dari booking / upload manual) */}
-        <Dialog open={isSuratPreviewOpen} onOpenChange={setIsSuratPreviewOpen}>
+        {/* ✅ Preview Modal E-Surat Jalan (dari booking / trip_information / upload manual) */}
+        <Dialog
+          open={isSuratPreviewOpen}
+          onOpenChange={(open) => {
+            setIsSuratPreviewOpen(open);
+            if (!open && suratPreviewBlobUrl) {
+              try {
+                URL.revokeObjectURL(suratPreviewBlobUrl);
+              } catch (_) {}
+              setSuratPreviewBlobUrl('');
+            }
+          }}
+        >
           <DialogContent className="bg-slate-900 border-slate-700 text-white sm:max-w-5xl">
             <DialogHeader>
               <DialogTitle className="text-xl font-bold text-yellow-400">
@@ -672,15 +1067,21 @@ const PengaturanKeberangkatan = () => {
             </DialogHeader>
 
             <div className="w-full h-[75vh] bg-slate-950/50 border border-slate-700 rounded-lg overflow-hidden flex items-center justify-center">
-              {!suratPreviewSrc ? (
+              {suratPreviewLoading ? (
+                <div className="text-sm text-gray-400">Memuat surat jalan...</div>
+              ) : suratPreviewError ? (
+                <div className="text-sm text-red-400">{suratPreviewError}</div>
+              ) : suratPreviewIsJson ? (
+                <div className="w-full h-full overflow-auto p-4">
+                  {renderSuratJalanJson(suratPreviewJson)}
+                </div>
+              ) : !suratPreviewSrc ? (
                 <div className="text-sm text-gray-400">Tidak ada file untuk dipreview.</div>
               ) : suratPreviewIsPdf ? (
-                <iframe
-                  title="Preview Surat Jalan"
-                  src={suratPreviewSrc}
-                  className="w-full h-full"
-                />
+                // ✅ PDF asli
+                <iframe title="Preview Surat Jalan" src={suratPreviewSrc} className="w-full h-full" />
               ) : (
+                // ✅ Image asli
                 <img
                   src={suratPreviewSrc}
                   alt="Preview Surat Jalan"
@@ -696,13 +1097,13 @@ const PengaturanKeberangkatan = () => {
 };
 
 export default PengaturanKeberangkatan;
-  function hasSuratJalan(v) {
-    if (v === null || v === undefined) return false;
-    const s = String(v).trim();
-    if (!s) return false;
-    const lower = s.toLowerCase();
-    if (lower === '-' || lower === 'belum upload' || lower === 'null' || lower === 'undefined') return false;
-    return true;
-  }
 
+function hasSuratJalan(v) {
+  if (v === null || v === undefined) return false;
+  const s = String(v).trim();
+  if (!s) return false;
+  const lower = s.toLowerCase();
+  if (lower === '-' || lower === 'belum upload' || lower === 'null' || lower === 'undefined') return false;
+  return true;
+}
 

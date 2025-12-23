@@ -291,117 +291,123 @@ const AkunDriver = () => {
                     </td>
                   </tr>
                 ) : (
-                  filteredItems.map((item) => (
-                    <motion.tr
-                      key={item.id}
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      className="hover:bg-slate-700/30"
-                    >
-                      <td className="py-3 px-6 text-sm text-gray-100">
-                        <div className="flex items-center gap-2">
-                          <Icon
-                            iconNode={steeringWheel}
-                            className="w-4 h-4 text-emerald-400"
-                          />
-                          <span>{item.driverName}</span>
-                        </div>
-                      </td>
-                      <td className="py-3 px-6 text-sm text-gray-100">
-                        {item.bookingName}
-                      </td>
-                      <td className="py-3 px-6 text-sm text-gray-200 max-w-xs">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-1">
-                            <Phone className="w-3 h-3 text-green-400" />
-                            <span>{item.phone}</span>
+                  filteredItems.map((item) => {
+                    const payMethod = item.paymentMethod || 'Cash';
+                    const payStatus = item.paymentStatus || 'Belum Sukses';
+                    const depStatus = item.departureStatus || 'Belum Berangkat';
+
+                    return (
+                      <motion.tr
+                        key={item.id}
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        className="hover:bg-slate-700/30"
+                      >
+                        <td className="py-3 px-6 text-sm text-gray-100">
+                          <div className="flex items-center gap-2">
+                            <Icon
+                              iconNode={steeringWheel}
+                              className="w-4 h-4 text-emerald-400"
+                            />
+                            <span>{item.driverName}</span>
                           </div>
-                          <div className="flex items-center gap-1 text-xs text-gray-300 truncate">
-                            <MapPin className="w-3 h-3 text-red-400" />
-                            <span>{item.pickupAddress}</span>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-3 px-6 text-sm text-gray-200">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-1">
-                            <Calendar className="w-3 h-3 text-blue-400" />
-                            <span>{item.departureDate || '-'}</span>
-                          </div>
-                          <div className="flex items-center gap-1 text-xs">
-                            <Armchair className="w-3 h-3 text-yellow-400" />
-                            <span>{item.seatNumbers || '-'}</span>
-                          </div>
-                          {item.passengerCount && (
-                            <div className="text-xs text-gray-400">
-                              {item.passengerCount} Penumpang/Barang
+                        </td>
+                        <td className="py-3 px-6 text-sm text-gray-100">
+                          {item.bookingName}
+                        </td>
+                        <td className="py-3 px-6 text-sm text-gray-200 max-w-xs">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-1">
+                              <Phone className="w-3 h-3 text-green-400" />
+                              <span>{item.phone}</span>
                             </div>
-                          )}
-                        </div>
-                      </td>
-                      <td className="py-3 px-6 text-sm text-gray-200">
-                        {item.serviceType}
-                      </td>
-                      <td className="py-3 px-6 text-sm">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-1 text-xs text-gray-300">
-                            <Banknote className="w-3 h-3 text-yellow-400" />
-                            <span>{item.paymentMethod}</span>
+                            <div className="flex items-center gap-1 text-xs text-gray-300 truncate">
+                              <MapPin className="w-3 h-3 text-red-400" />
+                              <span>{item.pickupAddress}</span>
+                            </div>
                           </div>
+                        </td>
+                        <td className="py-3 px-6 text-sm text-gray-200">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-1">
+                              <Calendar className="w-3 h-3 text-blue-400" />
+                              <span>{item.departureDate || '-'}</span>
+                            </div>
+                            <div className="flex items-center gap-1 text-xs">
+                              <Armchair className="w-3 h-3 text-yellow-400" />
+                              <span>{item.seatNumbers || '-'}</span>
+                            </div>
+                            {item.passengerCount && (
+                              <div className="text-xs text-gray-400">
+                                {item.passengerCount} Penumpang/Barang
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3 px-6 text-sm text-gray-200">
+                          {item.serviceType}
+                        </td>
+                        <td className="py-3 px-6 text-sm">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-1 text-xs text-gray-300">
+                              <Banknote className="w-3 h-3 text-yellow-400" />
+                              <span>{payMethod}</span>
+                            </div>
+                            <span
+                              className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold ${
+                                payStatus === 'Pembayaran Sukses'
+                                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/40'
+                                  : 'bg-red-500/10 text-red-400 border border-red-500/40'
+                              }`}
+                            >
+                              {payStatus === 'Pembayaran Sukses' ? (
+                                <CheckCircle className="w-3 h-3" />
+                              ) : (
+                                <XCircle className="w-3 h-3" />
+                              )}
+                              {payStatus}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-6 text-sm">
                           <span
                             className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold ${
-                              item.paymentStatus === 'Pembayaran Sukses'
+                              depStatus === 'Berangkat'
                                 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/40'
-                                : 'bg-red-500/10 text-red-400 border border-red-500/40'
+                                : 'bg-orange-500/10 text-orange-400 border border-orange-500/40'
                             }`}
                           >
-                            {item.paymentStatus === 'Pembayaran Sukses' ? (
+                            {depStatus === 'Berangkat' ? (
                               <CheckCircle className="w-3 h-3" />
                             ) : (
                               <XCircle className="w-3 h-3" />
                             )}
-                            {item.paymentStatus}
+                            {depStatus}
                           </span>
-                        </div>
-                      </td>
-                      <td className="py-3 px-6 text-sm">
-                        <span
-                          className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold ${
-                            item.departureStatus === 'Berangkat'
-                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/40'
-                              : 'bg-orange-500/10 text-orange-400 border border-orange-500/40'
-                          }`}
-                        >
-                          {item.departureStatus === 'Berangkat' ? (
-                            <CheckCircle className="w-3 h-3" />
-                          ) : (
-                            <XCircle className="w-3 h-3" />
-                          )}
-                          {item.departureStatus}
-                        </span>
-                      </td>
-                      <td className="py-3 px-6 text-right text-sm">
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="border-gray-600 text-gray-200"
-                            onClick={() => openEdit(item)}
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="border-red-500/50 text-red-400 hover:bg-red-500/10"
-                            onClick={() => handleDelete(item.id)}
-                          >
-                            Hapus
-                          </Button>
-                        </div>
-                      </td>
-                    </motion.tr>
-                  ))
+                        </td>
+                        <td className="py-3 px-6 text-right text-sm">
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-gray-600 text-gray-200"
+                              onClick={() => openEdit(item)}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-red-500/50 text-red-400 hover:bg-red-500/10"
+                              onClick={() => handleDelete(item.id)}
+                            >
+                              Hapus
+                            </Button>
+                          </div>
+                        </td>
+                      </motion.tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>

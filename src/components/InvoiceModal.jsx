@@ -20,6 +20,9 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
   const [paymentMethod, setPaymentMethod] = useState("");
   const [checkingStatus, setCheckingStatus] = useState(false);
 
+  const [departureSyncing, setDepartureSyncing] = useState(false);
+  const [lastSyncedDepartureKey, setLastSyncedDepartureKey] = useState("");
+
   // helper
   const norm = (v) => String(v || "").trim().toLowerCase();
 
@@ -71,6 +74,8 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
       setPaymentStatus("");
       setPaymentMethod("");
       setCheckingStatus(false);
+      setLastSyncedDepartureKey("");
+      setDepartureSyncing(false);
       return;
     }
 
@@ -221,6 +226,34 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
     return () => controller.abort();
   }, [isOpen, activeTab, actualBookingId, isReguler, isPPOB, API_BASE, toast, hideSuratJalan]);
 
+  // Auto-fetch surat jalan setelah lunas (sinkronisasi tanpa harus buka tab)
+  useEffect(() => {
+    if (!isOpen || !isReguler || isPPOB) return;
+    if (!actualBookingId || !isPaid) return;
+    if (suratJalan || suratLoading) return;
+
+    const controller = new AbortController();
+    setSuratLoading(true);
+
+    fetch(`${API_BASE}/api/reguler/bookings/${actualBookingId}/surat-jalan?scope=trip`, { signal: controller.signal })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.message || data?.error || "Gagal mengambil data surat jalan");
+        return data;
+      })
+      .then((data) => {
+        setSuratJalan(data);
+      })
+      .catch((e) => {
+        if (e.name === "AbortError") return;
+        setSuratJalan(null);
+        console.warn("Auto-fetch surat jalan gagal:", e?.message || e);
+      })
+      .finally(() => setSuratLoading(false));
+
+    return () => controller.abort();
+  }, [isOpen, isReguler, isPPOB, actualBookingId, isPaid, suratJalan, suratLoading, API_BASE]);
+
   const handleDownload = () => {
     // ✅ gating download: ticket/invoice tidak boleh kalau belum lunas
     if (!isPaid && activeTab !== "surat-jalan") {
@@ -271,6 +304,91 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
   // jumlah baris minimal 7 seperti template surat jalan
   const rowCount = Math.max(7, paxList.length);
 
+  const seatsFromSurat = Array.isArray(suratJalan?.passengers)
+    ? suratJalan.passengers.map((p) => p.seat).filter(Boolean)
+    : [];
+  const seatNumbersForDepart = (selectedSeats?.length ? selectedSeats : seatsFromSurat).join(", ");
+  const passengerCountForDepart =
+    selectedSeats?.length ||
+    seatsFromSurat.length ||
+    paxList.length ||
+    Number(bookingData?.passengerCount || 0) ||
+    0;
+  const bookingIdForDepart = actualBookingId ? Number(actualBookingId) : undefined;
+  const validBookingIdForDepart =
+    Number.isFinite(bookingIdForDepart) && bookingIdForDepart > 0 ? bookingIdForDepart : null;
+  const suratJalanUrlFallback = actualBookingId
+    ? `${API_BASE}/api/reguler/bookings/${actualBookingId}/surat-jalan?scope=trip`
+    : "";
+
+  const suratFileSrc =
+    suratJalan?.downloadUrl ||
+    suratJalan?.url ||
+    suratJalan?.src ||
+    suratJalan?.file ||
+    "";
+  const suratIsPdf = String(suratFileSrc || "").toLowerCase().includes(".pdf");
+
+  const departurePayload = useMemo(
+    () => ({
+      bookingId: validBookingIdForDepart ?? undefined,
+      bookingName: passengerName || bookingData?.bookingName || "",
+      phone: passengerPhone || bookingData?.passengerPhone || bookingData?.phone || "",
+      pickupAddress: pickupLocation || pickupAddress || suratJalan?.pickupLocation || jemputSJ || "",
+      departureDate: suratJalan?.tripDate || date || "",
+      departureTime: suratJalan?.tripTime || time || "",
+      seatNumbers: seatNumbersForDepart,
+      passengerCount: String(passengerCountForDepart || 0),
+      serviceType: category || bookingData?.serviceType || "Reguler",
+      driverName: suratJalan?.driverName || "",
+      vehicleCode: suratJalan?.vehicleCode || "",
+      routeFrom: suratJalan?.routeFrom || from || jemputSJ || "",
+      routeTo: suratJalan?.routeTo || to || tujuanSJ || "",
+      suratJalanFile:
+        suratJalan?.downloadUrl ||
+        suratJalan?.url ||
+        suratJalan?.src ||
+        suratJalan?.file ||
+        suratJalanUrlFallback,
+      suratJalanFileName: suratJalan?.fileName || (actualBookingId ? `surat_jalan_${actualBookingId}.pdf` : ""),
+      departureStatus: "Berangkat",
+    }),
+    [
+      validBookingIdForDepart,
+      passengerName,
+      bookingData?.bookingName,
+      passengerPhone,
+      bookingData?.passengerPhone,
+      bookingData?.phone,
+      pickupLocation,
+      pickupAddress,
+      suratJalan?.pickupLocation,
+      jemputSJ,
+      suratJalan?.tripDate,
+      date,
+      suratJalan?.tripTime,
+      time,
+      seatNumbersForDepart,
+      passengerCountForDepart,
+      category,
+      bookingData?.serviceType,
+      suratJalan?.driverName,
+      suratJalan?.vehicleCode,
+      suratJalan?.routeFrom,
+      from,
+      suratJalan?.routeTo,
+      to,
+      tujuanSJ,
+      suratJalan?.downloadUrl,
+      suratJalan?.url,
+      suratJalan?.src,
+      suratJalan?.file,
+      suratJalan?.fileName,
+    ],
+  );
+
+  const departurePayloadKey = useMemo(() => JSON.stringify(departurePayload), [departurePayload]);
+
   const LockedBox = ({ title }) => (
     <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-start gap-3">
       <Lock className="w-5 h-5 text-red-300 mt-0.5" />
@@ -285,6 +403,74 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
       </div>
     </div>
   );
+
+  // kirim otomatis ke Pengaturan Keberangkatan saat sudah lunas
+  useEffect(() => {
+    if (!isOpen || !isReguler || isPPOB) return;
+    if (!actualBookingId || !isPaid) return;
+    if (!departurePayloadKey || departurePayloadKey === lastSyncedDepartureKey) return;
+    if (departureSyncing) return;
+
+    let aborted = false;
+
+    const run = async () => {
+      setDepartureSyncing(true);
+      try {
+        let existingId = null;
+        try {
+          const resList = await fetch(`${API_BASE}/api/departure-settings`);
+          const dataList = await resList.json().catch(() => []);
+          if (Array.isArray(dataList)) {
+            if (validBookingIdForDepart) {
+              const found = dataList.find((d) => String(d.bookingId) === String(validBookingIdForDepart));
+              if (found) existingId = found.id;
+            }
+          }
+        } catch (err) {
+          console.warn("Cek departure-settings gagal", err);
+        }
+
+        const url = existingId
+          ? `${API_BASE}/api/departure-settings/${existingId}`
+          : `${API_BASE}/api/departure-settings`;
+        const method = existingId ? "PUT" : "POST";
+
+        const res = await fetch(url, {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(departurePayload),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data?.error || `Gagal sinkronisasi (${res.status})`);
+        }
+
+        if (!aborted) setLastSyncedDepartureKey(departurePayloadKey);
+      } catch (err) {
+        if (!aborted) console.error("Sinkronisasi Pengaturan Keberangkatan gagal", err);
+      } finally {
+        if (!aborted) setDepartureSyncing(false);
+      }
+    };
+
+    run();
+
+    return () => {
+      aborted = true;
+    };
+  }, [
+    API_BASE,
+    isOpen,
+    isReguler,
+    isPPOB,
+    validBookingIdForDepart,
+    isPaid,
+    departurePayloadKey,
+    lastSyncedDepartureKey,
+    departurePayload,
+    departureSyncing,
+  ]);
 
   return (
     <Dialog
@@ -554,7 +740,21 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
               {/* TAB 2: SURAT JALAN */}
               {!hideSuratJalan ? (
                 <TabsContent value="surat-jalan" className="mt-0">
-                  <div className="w-full bg-white text-black p-8 font-sans min-h-[600px] border border-gray-200 shadow-xl">
+                  {/* Jika ada file surat jalan (PDF/IMG), tampilkan langsung */}
+                  {suratFileSrc ? (
+                    <div className="w-full h-[80vh] bg-slate-950 border border-gray-200 shadow-xl rounded-md overflow-hidden flex items-center justify-center">
+                      {suratIsPdf ? (
+                        <iframe title="Surat Jalan" src={suratFileSrc} className="w-full h-full border-0" />
+                      ) : (
+                        <img
+                          src={suratFileSrc}
+                          alt="Surat Jalan"
+                          className="max-w-full max-h-full object-contain"
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    <div className="w-full bg-white text-black p-8 font-sans min-h-[600px] border border-gray-200 shadow-xl">
                     <div className="flex items-start justify-between mb-6">
                       <div className="flex items-center gap-4">
                         <div className="w-20 h-20 bg-white border-2 border-black rounded-full p-1 flex items-center justify-center shrink-0">
@@ -680,7 +880,8 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
                         <span className="border-t border-black pt-1 px-4 min-w-[150px]">(.........................)</span>
                       </div>
                     </div>
-                  </div>
+                    </div>
+                  )}
                 </TabsContent>
               ) : null}
             </Tabs>
