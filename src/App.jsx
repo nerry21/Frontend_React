@@ -39,6 +39,7 @@ import AdminUserData from '@/pages/AdminUserData';
 
 import ValidasiPembayaran from '@/pages/ValidasiPembayaran';
 import PengaturanKeberangkatan from '@/pages/PengaturanKeberangkatan';
+import PengaturanKepulangan from '@/pages/PengaturanKepulangan';
 import AkunDriver from '@/pages/AkunDriver';
 
 import Unauthorized from '@/pages/Unauthorized';
@@ -293,6 +294,14 @@ const AppRoutes = () => {
           element={
             <PrivateRoute allowedRoles={['owner', 'admin', 'mitra', 'driver']}>
               <PengaturanKeberangkatan />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/pengaturan-kepulangan"
+          element={
+            <PrivateRoute allowedRoles={['owner', 'admin', 'mitra', 'driver']}>
+              <PengaturanKepulangan />
             </PrivateRoute>
           }
         />

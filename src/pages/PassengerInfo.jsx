@@ -8,12 +8,6 @@ import {
   Edit,
   Trash2,
   Download,
-  Eye,
-  Users,
-  Phone,
-  Calendar,
-  Clock,
-  MapPin,
   FileText,
   X,
 } from 'lucide-react';
@@ -27,11 +21,9 @@ import { useToast } from '@/components/ui/use-toast';
 // - bisa berupa dataURL/base64
 // - bisa berupa URL absolut
 // - bisa berupa URL relatif (mis. /uploads/.. atau /api/..)
-// - bisa berupa marker: "BOOKING:<id>" (dokumen ada di halaman booking)
+// - bisa berupa marker: "BOOKING:<id>" atau "ETICKET_INVOICE_FROM_BOOKING:<id>"
 // ==============================
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080';
-// ✅ FIX: default route booking di App.jsx adalah "/booking".
-// (Kalau env VITE_BOOKING_PAGE_PATH diset, tetap akan dipakai.)
 const BOOKING_PAGE_PATH = import.meta.env.VITE_BOOKING_PAGE_PATH || '/booking';
 
 function isBookingMarker(v) {
@@ -58,36 +50,23 @@ function parseBookingId(marker) {
 
 function resolveToAbsoluteUrl(v) {
   if (!v || typeof v !== 'string') return v;
-
-  // sudah data URL / base64
   if (v.startsWith('data:')) return v;
-
-  // sudah absolut
   if (v.startsWith('http://') || v.startsWith('https://')) return v;
-
-  // marker booking -> tidak bisa jadi src img
   if (isBookingMarker(v)) return '';
-
-  // relatif: gabung dengan API_BASE
   if (v.startsWith('/')) return `${API_BASE}${v}`;
-
   return v;
 }
 
-function openETicket(v, navigate) {
+function openETicketLegacy(v, navigate) {
   if (!v) return;
 
-  // marker: buka halaman booking agar user bisa lihat invoice/e-ticket
+  // marker: buka halaman booking agar user bisa lihat invoice/e-ticket (kompatibilitas lama)
   const bookingId = parseBookingId(v);
   if (bookingId) {
-    // ✅ FIX: buka via SPA (tidak reload) + hanya tampilkan E-Ticket & Invoice.
-    // Surat jalan tetap ada di Trip Information (bukan dari Passenger Info).
     const url = `${BOOKING_PAGE_PATH}?bookingId=${bookingId}&showDocs=1&docs=eticket-invoice&hideSuratJalan=1`;
-
     if (typeof navigate === 'function') {
       navigate(url);
     } else {
-      // fallback kalau dipakai di luar react-router
       window.open(url, '_self');
     }
     return;
@@ -95,6 +74,13 @@ function openETicket(v, navigate) {
 
   const url = resolveToAbsoluteUrl(v);
   if (url) window.open(url, '_blank');
+}
+
+// ✅ NEW: buka PDF per passenger langsung dari backend (tanpa pindah ke booking)
+function openPassengerDoc(passengerId, type /* 'eticket' | 'invoice' */) {
+  if (!passengerId) return;
+  const url = `${API_BASE}/api/passengers/${passengerId}/${type}`;
+  window.open(url, '_blank');
 }
 
 import DashboardLayout from '@/components/DashboardLayout';
@@ -123,19 +109,16 @@ const PassengerInfo = () => {
     notes: '',
   });
 
-  // Fetch passengers data
   useEffect(() => {
     fetchPassengers();
   }, []);
 
   const fetchPassengers = async () => {
     try {
-      const response = await fetch('http://localhost:8080/api/passengers');
-      if (!response.ok) {
-        throw new Error('Failed to fetch passengers');
-      }
+      const response = await fetch(`${API_BASE}/api/passengers`);
+      if (!response.ok) throw new Error('Failed to fetch passengers');
       const data = await response.json();
-      setPassengers(data);
+      setPassengers(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Error fetching passengers:', error);
       toast({
@@ -147,9 +130,9 @@ const PassengerInfo = () => {
   };
 
   const filteredPassengers = passengers.filter((passenger) =>
-    passenger.passengerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    passenger.passengerPhone.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    passenger.serviceType.toLowerCase().includes(searchTerm.toLowerCase())
+    (passenger.passengerName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (passenger.passengerPhone || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (passenger.serviceType || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const resetForm = () => {
@@ -220,8 +203,8 @@ const PassengerInfo = () => {
 
     try {
       const url = currentPassenger
-        ? `http://localhost:8080/api/passengers/${currentPassenger.id}`
-        : 'http://localhost:8080/api/passengers';
+        ? `${API_BASE}/api/passengers/${currentPassenger.id}`
+        : `${API_BASE}/api/passengers`;
       const method = currentPassenger ? 'PUT' : 'POST';
 
       const response = await fetch(url, {
@@ -230,9 +213,7 @@ const PassengerInfo = () => {
         body: JSON.stringify(formData),
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to save passenger');
-      }
+      if (!response.ok) throw new Error('Failed to save passenger');
 
       toast({
         title: 'Success',
@@ -258,13 +239,11 @@ const PassengerInfo = () => {
 
     try {
       const response = await fetch(
-        `http://localhost:8080/api/passengers/${currentPassenger.id}`,
+        `${API_BASE}/api/passengers/${currentPassenger.id}`,
         { method: 'DELETE' }
       );
 
-      if (!response.ok) {
-        throw new Error('Failed to delete passenger');
-      }
+      if (!response.ok) throw new Error('Failed to delete passenger');
 
       toast({
         title: 'Success',
@@ -402,62 +381,87 @@ const PassengerInfo = () => {
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Aksi</th>
                 </tr>
               </thead>
+
               <tbody>
-                {filteredPassengers.map((passenger) => (
-                  <tr key={passenger.id} className="border-t border-slate-700 hover:bg-slate-800/50">
-                    <td className="px-4 py-3 text-white font-medium">{passenger.passengerName}</td>
-                    <td className="px-4 py-3 text-gray-300">{passenger.passengerPhone}</td>
-                    <td className="px-4 py-3 text-gray-300">{passenger.date}</td>
-                    <td className="px-4 py-3 text-gray-300">{passenger.departureTime}</td>
-                    <td className="px-4 py-3 text-gray-300 max-w-xs truncate">{passenger.pickupAddress}</td>
-                    <td className="px-4 py-3 text-gray-300 max-w-xs truncate">{passenger.dropoffAddress}</td>
-                    <td className="px-4 py-3 text-gray-300">
-                      Rp {Number(passenger.totalAmount || 0).toLocaleString('id-ID')}
-                    </td>
-                    <td className="px-4 py-3 text-gray-300">{passenger.selectedSeats}</td>
-                    <td className="px-4 py-3 text-gray-300">{passenger.serviceType}</td>
+                {filteredPassengers.map((passenger) => {
+                  const hasLegacyDoc = !!passenger.eTicketPhoto && !isBookingMarker(passenger.eTicketPhoto);
+                  return (
+                    <tr key={passenger.id} className="border-t border-slate-700 hover:bg-slate-800/50">
+                      <td className="px-4 py-3 text-white font-medium">{passenger.passengerName}</td>
+                      <td className="px-4 py-3 text-gray-300">{passenger.passengerPhone}</td>
+                      <td className="px-4 py-3 text-gray-300">{passenger.date}</td>
+                      <td className="px-4 py-3 text-gray-300">{passenger.departureTime}</td>
+                      <td className="px-4 py-3 text-gray-300 max-w-xs truncate">{passenger.pickupAddress}</td>
+                      <td className="px-4 py-3 text-gray-300 max-w-xs truncate">{passenger.dropoffAddress}</td>
+                      <td className="px-4 py-3 text-gray-300">
+                        Rp {Number(passenger.totalAmount || 0).toLocaleString('id-ID')}
+                      </td>
+                      <td className="px-4 py-3 text-gray-300">{passenger.selectedSeats}</td>
+                      <td className="px-4 py-3 text-gray-300">{passenger.serviceType}</td>
 
-                    {/* E-Ticket column */}
-                    <td className="px-4 py-3">
-                      {passenger.eTicketPhoto ? (
-                        <button
-                          type="button"
-                          onClick={() => openETicket(passenger.eTicketPhoto, navigate)}
-                          className="inline-flex items-center gap-2 text-yellow-400 hover:text-yellow-300 underline text-sm"
-                          title="Buka E-Ticket / Invoice"
-                        >
-                          <FileText className="w-4 h-4" />
-                          DOC
-                        </button>
-                      ) : (
-                        <span className="text-gray-500 text-sm">-</span>
-                      )}
-                    </td>
+                      {/* ✅ E-Ticket + Invoice per passenger */}
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => openPassengerDoc(passenger.id, 'eticket')}
+                            className="inline-flex items-center gap-2 text-yellow-400 hover:text-yellow-300 underline text-sm"
+                            title="Buka E-Ticket (PDF)"
+                          >
+                            <FileText className="w-4 h-4" />
+                            ETK
+                          </button>
 
-                    <td className="px-4 py-3 text-gray-300">{passenger.driverName}</td>
-                    <td className="px-4 py-3 text-gray-300">{passenger.vehicleCode}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleOpenModal(passenger)}
-                          className="border-slate-600 text-gray-300 hover:bg-slate-800"
-                        >
-                          <Edit className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleOpenDeleteModal(passenger)}
-                          className="border-red-500/40 text-red-300 hover:bg-red-500/10"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          <button
+                            type="button"
+                            onClick={() => openPassengerDoc(passenger.id, 'invoice')}
+                            className="inline-flex items-center gap-2 text-green-400 hover:text-green-300 underline text-sm"
+                            title="Buka Invoice (PDF)"
+                          >
+                            <FileText className="w-4 h-4" />
+                            INV
+                          </button>
+
+                          {/* Legacy DOC (jika eTicketPhoto berupa URL/base64) */}
+                          {hasLegacyDoc && (
+                            <button
+                              type="button"
+                              onClick={() => openETicketLegacy(passenger.eTicketPhoto, navigate)}
+                              className="inline-flex items-center gap-2 text-slate-200 hover:text-white underline text-sm"
+                              title="Buka dokumen lama (URL/Base64)"
+                            >
+                              DOC
+                            </button>
+                          )}
+                        </div>
+                      </td>
+
+                      <td className="px-4 py-3 text-gray-300">{passenger.driverName}</td>
+                      <td className="px-4 py-3 text-gray-300">{passenger.vehicleCode}</td>
+
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleOpenModal(passenger)}
+                            className="border-slate-600 text-gray-300 hover:bg-slate-800"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleOpenDeleteModal(passenger)}
+                            className="border-red-500/40 text-red-300 hover:bg-red-500/10"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
 
                 {filteredPassengers.length === 0 && (
                   <tr>
@@ -467,6 +471,7 @@ const PassengerInfo = () => {
                   </tr>
                 )}
               </tbody>
+
             </table>
           </div>
         </div>
@@ -503,11 +508,8 @@ const PassengerInfo = () => {
 
                   <form onSubmit={handleSubmit} className="space-y-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      {/* Passenger Name */}
                       <div className="space-y-2">
-                        <Label htmlFor="passengerName" className="text-gray-300">
-                          Nama Penumpang
-                        </Label>
+                        <Label htmlFor="passengerName" className="text-gray-300">Nama Penumpang</Label>
                         <Input
                           id="passengerName"
                           name="passengerName"
@@ -518,11 +520,8 @@ const PassengerInfo = () => {
                         />
                       </div>
 
-                      {/* Passenger Phone */}
                       <div className="space-y-2">
-                        <Label htmlFor="passengerPhone" className="text-gray-300">
-                          No HP
-                        </Label>
+                        <Label htmlFor="passengerPhone" className="text-gray-300">No HP</Label>
                         <Input
                           id="passengerPhone"
                           name="passengerPhone"
@@ -533,11 +532,8 @@ const PassengerInfo = () => {
                         />
                       </div>
 
-                      {/* Date */}
                       <div className="space-y-2">
-                        <Label htmlFor="date" className="text-gray-300">
-                          Tanggal
-                        </Label>
+                        <Label htmlFor="date" className="text-gray-300">Tanggal</Label>
                         <Input
                           id="date"
                           name="date"
@@ -548,11 +544,8 @@ const PassengerInfo = () => {
                         />
                       </div>
 
-                      {/* Departure Time */}
                       <div className="space-y-2">
-                        <Label htmlFor="departureTime" className="text-gray-300">
-                          Jam Berangkat
-                        </Label>
+                        <Label htmlFor="departureTime" className="text-gray-300">Jam Berangkat</Label>
                         <Input
                           id="departureTime"
                           name="departureTime"
@@ -563,11 +556,8 @@ const PassengerInfo = () => {
                         />
                       </div>
 
-                      {/* Pickup Address */}
                       <div className="space-y-2 sm:col-span-2">
-                        <Label htmlFor="pickupAddress" className="text-gray-300">
-                          Alamat Pickup
-                        </Label>
+                        <Label htmlFor="pickupAddress" className="text-gray-300">Alamat Pickup</Label>
                         <Input
                           id="pickupAddress"
                           name="pickupAddress"
@@ -577,11 +567,8 @@ const PassengerInfo = () => {
                         />
                       </div>
 
-                      {/* Dropoff Address */}
                       <div className="space-y-2 sm:col-span-2">
-                        <Label htmlFor="dropoffAddress" className="text-gray-300">
-                          Alamat Dropoff
-                        </Label>
+                        <Label htmlFor="dropoffAddress" className="text-gray-300">Alamat Dropoff</Label>
                         <Input
                           id="dropoffAddress"
                           name="dropoffAddress"
@@ -591,11 +578,8 @@ const PassengerInfo = () => {
                         />
                       </div>
 
-                      {/* Total Amount */}
                       <div className="space-y-2">
-                        <Label htmlFor="totalAmount" className="text-gray-300">
-                          Total Amount
-                        </Label>
+                        <Label htmlFor="totalAmount" className="text-gray-300">Total Amount</Label>
                         <Input
                           id="totalAmount"
                           name="totalAmount"
@@ -605,11 +589,8 @@ const PassengerInfo = () => {
                         />
                       </div>
 
-                      {/* Selected Seats */}
                       <div className="space-y-2">
-                        <Label htmlFor="selectedSeats" className="text-gray-300">
-                          Selected Seats
-                        </Label>
+                        <Label htmlFor="selectedSeats" className="text-gray-300">Selected Seats</Label>
                         <Input
                           id="selectedSeats"
                           name="selectedSeats"
@@ -619,11 +600,8 @@ const PassengerInfo = () => {
                         />
                       </div>
 
-                      {/* Service Type */}
                       <div className="space-y-2">
-                        <Label htmlFor="serviceType" className="text-gray-300">
-                          Service Type
-                        </Label>
+                        <Label htmlFor="serviceType" className="text-gray-300">Service Type</Label>
                         <select
                           id="serviceType"
                           name="serviceType"
@@ -638,11 +616,8 @@ const PassengerInfo = () => {
                         </select>
                       </div>
 
-                      {/* Driver Name */}
                       <div className="space-y-2">
-                        <Label htmlFor="driverName" className="text-gray-300">
-                          Driver Name
-                        </Label>
+                        <Label htmlFor="driverName" className="text-gray-300">Driver Name</Label>
                         <Input
                           id="driverName"
                           name="driverName"
@@ -652,11 +627,8 @@ const PassengerInfo = () => {
                         />
                       </div>
 
-                      {/* Vehicle Code */}
                       <div className="space-y-2">
-                        <Label htmlFor="vehicleCode" className="text-gray-300">
-                          Vehicle Code
-                        </Label>
+                        <Label htmlFor="vehicleCode" className="text-gray-300">Vehicle Code</Label>
                         <Input
                           id="vehicleCode"
                           name="vehicleCode"
@@ -682,7 +654,7 @@ const PassengerInfo = () => {
                           {formData.eTicketPhoto && (
                             <button
                               type="button"
-                              onClick={() => openETicket(formData.eTicketPhoto, navigate)}
+                              onClick={() => openETicketLegacy(formData.eTicketPhoto, navigate)}
                               className="text-yellow-400 underline text-sm"
                             >
                               Preview
@@ -707,11 +679,8 @@ const PassengerInfo = () => {
                       </div>
                     </div>
 
-                    {/* Notes */}
                     <div className="space-y-2">
-                      <Label htmlFor="notes" className="text-gray-300">
-                        Keterangan / Catatan
-                      </Label>
+                      <Label htmlFor="notes" className="text-gray-300">Keterangan / Catatan</Label>
                       <textarea
                         id="notes"
                         name="notes"
@@ -721,7 +690,6 @@ const PassengerInfo = () => {
                       />
                     </div>
 
-                    {/* Buttons */}
                     <div className="flex items-center justify-end gap-3 pt-2">
                       <Button
                         type="button"
@@ -763,9 +731,7 @@ const PassengerInfo = () => {
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="p-6 space-y-4">
-                  <h3 className="text-lg font-bold text-white">
-                    Hapus Penumpang?
-                  </h3>
+                  <h3 className="text-lg font-bold text-white">Hapus Penumpang?</h3>
                   <p className="text-gray-400 text-sm">
                     Anda yakin ingin menghapus data penumpang{' '}
                     <span className="text-white font-semibold">

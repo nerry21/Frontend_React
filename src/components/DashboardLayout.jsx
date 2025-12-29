@@ -133,7 +133,13 @@ const DashboardLayout = ({ children }) => {
       icon: Route,
       label: 'Pengaturan Keberangkatan',
       path: '/pengaturan-keberangkatan',
-      roles: ['owner', 'admin'],
+      roles: ['owner', 'admin', 'mitra', 'driver'],
+    },
+    {
+      icon: Route,
+      label: 'Pengaturan Kepulangan',
+      path: '/pengaturan-kepulangan',
+      roles: ['owner', 'admin', 'mitra', 'driver'],
     },
     {
       icon: IdCard,
