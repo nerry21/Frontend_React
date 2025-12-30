@@ -239,7 +239,7 @@ const RegulerStep = (props) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seatCount]);
 
-  // Keep passengers[] aligned with selectedSeats
+  // Keep passengers[] aligned with selectedSeats (now includes phone)
   useEffect(() => {
     updateBookingData((prev) => {
       const selected = (prev.selectedSeats || [])
@@ -248,19 +248,34 @@ const RegulerStep = (props) => {
 
       const current = Array.isArray(prev.passengers) ? prev.passengers : [];
       const map = new Map(
-        current.map((p) => [String(p.seat || '').trim().toUpperCase(), String(p.name || '')])
+        current.map((p) => [
+          String(p.seat || '').trim().toUpperCase(),
+          { name: String(p.name || ''), phone: String(p.phone || '') },
+        ])
       );
 
-      const nextPassengers = selected.map((seat) => ({
-        seat,
-        name: map.get(seat) || '',
-      }));
+      const nextPassengers = selected.map((seat) => {
+        const bySeat = map.get(seat);
+        return {
+          seat,
+          name: (bySeat?.name || '').trim(),
+          phone: (bySeat?.phone || '').trim(),
+        };
+      });
 
       // self: prefill seat pertama dengan nama pemesan
       if (prev.bookingFor === 'self' && nextPassengers.length >= 1) {
         const bookerName = String(prev.passengerName || '').trim();
         if (bookerName && !nextPassengers[0].name) {
           nextPassengers[0] = { seat: nextPassengers[0].seat, name: bookerName };
+        }
+        // optional: prefill phone untuk single seat self booking
+        if (
+          nextPassengers.length === 1 &&
+          !nextPassengers[0].phone &&
+          String(prev.passengerPhone || '').trim()
+        ) {
+          nextPassengers[0].phone = String(prev.passengerPhone || '').trim();
         }
       }
 
@@ -270,7 +285,8 @@ const RegulerStep = (props) => {
           const c = current[i];
           return (
             String(c?.seat || '').trim().toUpperCase() === p.seat &&
-            String(c?.name || '').trim() === String(p.name || '').trim()
+            String(c?.name || '').trim() === String(p.name || '').trim() &&
+            String(c?.phone || '').trim() === String(p.phone || '').trim()
           );
         });
 
@@ -278,7 +294,7 @@ const RegulerStep = (props) => {
       return { ...prev, passengers: nextPassengers };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookingData.selectedSeats, bookingData.bookingFor, bookingData.passengerName]);
+  }, [bookingData.selectedSeats, bookingData.bookingFor, bookingData.passengerName, bookingData.passengerPhone]);
 
   // Fetch booked seats when route/time/date changes
   useEffect(() => {
@@ -329,6 +345,48 @@ const RegulerStep = (props) => {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookingData.from, bookingData.to, bookingData.date, bookingData.time]);
+
+  // Prefill penumpang per seat dari backend jika bookingId sudah ada
+  useEffect(() => {
+    const id = Number(bookingData.bookingId || 0);
+    if (!id || !(bookingData.selectedSeats || []).length) return;
+    let aborted = false;
+    const fetchPassengers = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/bookings/${id}/passengers`);
+        if (!res.ok) return;
+        const data = await res.json().catch(() => null);
+        if (!data || !Array.isArray(data.passengers)) return;
+        const map = new Map();
+        data.passengers.forEach((p) => {
+          const seat = String(p.seat_code || p.seatCode || '').trim().toUpperCase();
+          if (!seat) return;
+          map.set(seat, {
+            seat,
+            name: p.passenger_name || p.passengerName || '',
+            phone: p.passenger_phone || p.passengerPhone || '',
+          });
+        });
+        if (aborted || map.size === 0) return;
+        updateBookingData((prev) => {
+          const next = (prev.selectedSeats || []).map((s) => {
+            const seat = String(s || '').trim().toUpperCase();
+            const row = map.get(seat);
+            if (row) return row;
+            return prev.passengers?.find((x) => String(x.seat || '').toUpperCase() === seat) || { seat, name: '', phone: '' };
+          });
+          return { ...prev, passengers: next };
+        });
+      } catch {
+        /* ignore */
+      }
+    };
+    fetchPassengers();
+    return () => {
+      aborted = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookingData.bookingId, bookingData.selectedSeats]);
 
   // Fetch quote whenever route/time/date/selectedSeats changes
   useEffect(() => {
@@ -501,7 +559,12 @@ const RegulerStep = (props) => {
 
     const arr = Array.isArray(bookingData.passengers) ? bookingData.passengers : [];
     if (arr.length !== seatCount) return false;
-    return arr.every((p) => String(p?.seat || '').trim() && String(p?.name || '').trim());
+    return arr.every((p) => {
+      const seat = String(p?.seat || '').trim();
+      const name = String(p?.name || '').trim();
+      const phone = String(p?.phone || '').trim();
+      return seat && name && phone && phone.replace(/[^0-9+]/g, '').length >= 6;
+    });
   }, [bookingData.passengerName, bookingData.passengers, seatCount, showPassengerNamesList]);
 
   const quoteValid = Number(bookingData.totalAmount || 0) > 0 && Number(bookingData.pricePerSeat || 0) > 0;
@@ -543,11 +606,16 @@ const RegulerStep = (props) => {
 
     let passengersToSend = [];
     if (bookingData.bookingFor === 'self' && seatCount === 1) {
-      passengersToSend = [{ seat: selectedSeats[0], name: String(bookingData.passengerName || '').trim() }];
+      passengersToSend = [{
+        seat: selectedSeats[0],
+        name: String(bookingData.passengerName || '').trim(),
+        phone: String(bookingData.passengerPhone || '').trim(),
+      }];
     } else {
       passengersToSend = (bookingData.passengers || []).map((p) => ({
         seat: String(p.seat || '').trim().toUpperCase(),
         name: String(p.name || '').trim(),
+        phone: String(p.phone || '').trim(),
       }));
     }
 
@@ -614,6 +682,7 @@ const RegulerStep = (props) => {
           bookingId: nextBookingId,
           paymentStatus: nextPaymentStatus,
           paymentMethod: nextPaymentMethod,
+          passengers: passengersToSend,
         };
         localStorage.setItem(LS_LAST_BOOKING_SNAPSHOT, JSON.stringify(snap));
       } catch {
@@ -897,7 +966,7 @@ const RegulerStep = (props) => {
                       <Label className="text-gray-400 mb-1 block">Seat</Label>
                       <Input value={p.seat} readOnly disabled className="bg-slate-800 border-gray-700 text-white h-11" />
                     </div>
-                    <div className="md:col-span-2">
+                    <div className="md:col-span-1">
                       <Label className="text-gray-400 mb-1 block">Nama Penumpang</Label>
                       <Input
                         placeholder="Isi nama penumpang"
@@ -915,12 +984,30 @@ const RegulerStep = (props) => {
                         className="bg-slate-900 border-gray-600 text-white h-11"
                       />
                     </div>
+                    <div className="md:col-span-1">
+                      <Label className="text-gray-400 mb-1 block">No HP Penumpang</Label>
+                      <Input
+                        placeholder="0812..."
+                        value={p.phone || ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          updateBookingData((prev) => {
+                            const arr = Array.isArray(prev.passengers) ? [...prev.passengers] : [];
+                            const seat = String(p.seat || '').trim().toUpperCase();
+                            const i = arr.findIndex((x) => String(x.seat || '').trim().toUpperCase() === seat);
+                            if (i >= 0) arr[i] = { ...arr[i], phone: val };
+                            return { ...prev, passengers: arr };
+                          });
+                        }}
+                        className="bg-slate-900 border-gray-600 text-white h-11"
+                      />
+                    </div>
                   </div>
                 ))}
               </div>
 
               <p className="text-xs text-gray-500 mt-3">
-                *Nama penumpang wajib diisi sesuai seat yang dipilih. No HP cukup 1 (No HP pemesan).
+                *Nama dan no HP penumpang wajib diisi sesuai seat yang dipilih.
               </p>
             </div>
           )}

@@ -10,6 +10,7 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
   const API_BASE = import.meta?.env?.VITE_API_URL || "http://localhost:8080";
 
   const [activeTab, setActiveTab] = useState("ticket");
+  const [passengers, setPassengers] = useState([]);
 
   // ===== Surat Jalan state (ambil dari backend) =====
   const [suratJalan, setSuratJalan] = useState(null);
@@ -64,44 +65,7 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
     return false;
   }, [paymentStatus, paymentMethod]);
 
-  useEffect(() => {
-    // reset ketika modal ditutup
-    if (!isOpen) {
-      setActiveTab("ticket");
-      setSuratJalan(null);
-      setSuratLoading(false);
-
-      setPaymentStatus("");
-      setPaymentMethod("");
-      setCheckingStatus(false);
-      setLastSyncedDepartureKey("");
-      setDepartureSyncing(false);
-      return;
-    }
-
-    // sync payment status dari props setiap modal dibuka
-    const ps = bookingData?.paymentStatus || "";
-    const pm = bookingData?.paymentMethod || "";
-    setPaymentStatus(ps);
-    setPaymentMethod(pm);
-
-    // ✅ gating: kalau belum lunas, default buka surat jalan (bukan ticket)
-    const paid = (() => {
-      const st = norm(ps);
-      const pmm = norm(pm);
-      if (st === "lunas" || st === "paid" || st === "sukses" || st === "success" || st === "settlement") return true;
-      if (pmm === "cash") return true;
-      return false;
-    })();
-
-    // ✅ FIX: kalau mode docs-only, jangan pernah pindah ke surat-jalan
-    if (hideSuratJalan) {
-      setActiveTab("ticket");
-    } else {
-      setActiveTab(paid ? "ticket" : "surat-jalan");
-    }
-  }, [isOpen, bookingData, hideSuratJalan]);
-
+  // Destructure booking data lebih awal supaya bisa dipakai di effects
   if (!bookingData) return null;
 
   const {
@@ -140,8 +104,63 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
   // pakai bookingId kalau ada, fallback ke id lama
   const actualBookingId = bookingId ?? legacyId;
 
+  useEffect(() => {
+    // reset ketika modal ditutup
+    if (!isOpen) {
+      setActiveTab("ticket");
+      setSuratJalan(null);
+      setSuratLoading(false);
+      setPassengers([]);
+
+      setPaymentStatus("");
+      setPaymentMethod("");
+      setCheckingStatus(false);
+      setLastSyncedDepartureKey("");
+      setDepartureSyncing(false);
+      return;
+    }
+
+    // sync payment status dari props setiap modal dibuka
+    const ps = bookingData?.paymentStatus || "";
+    const pm = bookingData?.paymentMethod || "";
+    setPaymentStatus(ps);
+    setPaymentMethod(pm);
+
+    // ✅ gating: kalau belum lunas, default buka surat jalan (bukan ticket)
+    const paid = (() => {
+      const st = norm(ps);
+      const pmm = norm(pm);
+      if (st === "lunas" || st === "paid" || st === "sukses" || st === "success" || st === "settlement") return true;
+      if (pmm === "cash") return true;
+      return false;
+    })();
+
+    // ✅ FIX: kalau mode docs-only, jangan pernah pindah ke surat-jalan
+    if (hideSuratJalan) {
+      setActiveTab("ticket");
+    } else {
+      setActiveTab(paid ? "ticket" : "surat-jalan");
+    }
+  }, [isOpen, bookingData, hideSuratJalan]);
+
+  // Fetch penumpang per booking (untuk ETK/INV per seat)
+  useEffect(() => {
+    if (!isOpen || !actualBookingId || !isPaid) {
+      setPassengers([]);
+      return;
+    }
+    const controller = new AbortController();
+    fetch(`${API_BASE}/api/passengers?bookingId=${actualBookingId}`, { signal: controller.signal })
+      .then((res) => res.json().catch(() => []))
+      .then((data) => setPassengers(Array.isArray(data) ? data : []))
+      .catch(() => setPassengers([]));
+    return () => controller.abort();
+  }, [isOpen, actualBookingId, isPaid, API_BASE]);
+
+  const seatsFromPassengers = passengers.map((p) => p.selectedSeats).filter(Boolean);
   const isPackage = category === 'Paket Barang';
   const isReguler = category === 'Reguler';
+  const seatsForDisplay = passengers.length ? seatsFromPassengers : selectedSeats;
 
   const displayPaymentStatus = paymentStatus || (paymentMethod ? "Belum Bayar" : "Belum Bayar");
 
@@ -287,8 +306,25 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
     });
   };
 
-  // ===== Helpers surat jalan =====
+  // ===== Helpers surat jalan & dokumen per seat =====
   const paxList = Array.isArray(suratJalan?.passengers) ? suratJalan.passengers : [];
+
+  const invoiceRows = passengers.length
+    ? passengers.map((p) => ({
+        id: p.id,
+        seat: p.selectedSeats,
+        name: p.passengerName,
+        phone: p.passengerPhone,
+        amount: Number(p.totalAmount || 0),
+      }))
+    : [{
+        id: actualBookingId || 0,
+        seat: (selectedSeats || []).join(', '),
+        name: passengerName,
+        phone: passengerPhone,
+        amount: Number(totalAmount || 0),
+      }];
+  const invoiceTotal = invoiceRows.reduce((sum, r) => sum + Number(r.amount || 0), 0);
 
   // fallback global (kalau backend tidak kirim per-penumpang)
   const jemputSJ = suratJalan?.pickupLocation || pickupLocation || pickupAddress || from || "";
@@ -296,7 +332,10 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
   const hpSJ = suratJalan?.passengerPhone || passengerPhone || "";
 
   // fallback tarif jika tidak ada fare per penumpang
-  const seatCount = selectedSeats?.length || paxList?.length || 0;
+  const seatCount =
+    (seatsFromPassengers?.length || 0) ||
+    (selectedSeats?.length || 0) ||
+    (paxList?.length || 0);
   const tarifFallback =
     Number(suratJalan?.pricePerSeat || 0) ||
     (seatCount > 0 ? Math.round((Number(totalAmount || 0)) / seatCount) : Number(totalAmount || 0));
@@ -307,8 +346,10 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
   const seatsFromSurat = Array.isArray(suratJalan?.passengers)
     ? suratJalan.passengers.map((p) => p.seat).filter(Boolean)
     : [];
-  const seatNumbersForDepart = (selectedSeats?.length ? selectedSeats : seatsFromSurat).join(", ");
+  const seatNumbersForDepart =
+    (seatsFromPassengers.length ? seatsFromPassengers : (selectedSeats?.length ? selectedSeats : seatsFromSurat)).join(", ");
   const passengerCountForDepart =
+    seatsFromPassengers.length ||
     selectedSeats?.length ||
     seatsFromSurat.length ||
     paxList.length ||
@@ -594,6 +635,38 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
                   <LockedBox title="E-Ticket & Invoice" />
                 ) : (
                   <>
+                    {passengers.length > 0 && (
+                      <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
+                        <h3 className="text-sm font-semibold text-white mb-3">E-Ticket & Invoice per Penumpang</h3>
+                        <div className="space-y-2">
+                          {passengers.map((p) => (
+                            <div key={p.id} className="flex items-center justify-between bg-slate-900 rounded px-3 py-2">
+                              <div>
+                                <div className="text-white font-semibold">{p.passengerName} ({p.selectedSeats})</div>
+                                <div className="text-xs text-slate-300">Rp {Number(p.totalAmount || 0).toLocaleString('id-ID')}</div>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button
+                                  variant="outline"
+                                  className="text-yellow-400 border-yellow-500/40 hover:bg-yellow-500/10 h-8 px-2 text-xs"
+                                  onClick={() => window.open(`${API_BASE}/api/passengers/${p.id}/e-ticket`, '_blank')}
+                                >
+                                  ETK
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  className="text-green-400 border-green-500/40 hover:bg-green-500/10 h-8 px-2 text-xs"
+                                  onClick={() => window.open(`${API_BASE}/api/passengers/${p.id}/invoice`, '_blank')}
+                                >
+                                  INV
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {/* E-TICKET */}
                     <div className="w-full bg-[#FFFACD] text-[#000080] font-sans p-4 rounded-lg shadow-xl relative overflow-hidden border-4 border-[#000080]">
                       <div className="flex justify-between items-center border-b-4 border-[#000080] pb-2 mb-4">
@@ -644,12 +717,12 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
                               Nomor Bangku
                             </h3>
                             <div className="grid grid-cols-2 gap-4 max-w-[200px] mx-auto">
-                              <div className={`h-12 border-2 border-[#000080] flex items-center justify-center font-bold text-xl rounded ${selectedSeats.includes('1A') ? 'bg-[#000080] text-white' : 'bg-white'}`}>1</div>
+                              <div className={`h-12 border-2 border-[#000080] flex items-center justify-center font-bold text-xl rounded ${seatsForDisplay.includes('1A') ? 'bg-[#000080] text-white' : 'bg-white'}`}>1</div>
                               <div className="h-12 border-2 border-[#000080] flex items-center justify-center font-bold text-sm bg-gray-200 text-gray-500 rounded">SOPIR</div>
-                              <div className={`h-12 border-2 border-[#000080] flex items-center justify-center font-bold text-xl rounded ${selectedSeats.includes('2A') ? 'bg-[#000080] text-white' : 'bg-white'}`}>2</div>
-                              <div className={`h-12 border-2 border-[#000080] flex items-center justify-center font-bold text-xl rounded ${selectedSeats.includes('3A') ? 'bg-[#000080] text-white' : 'bg-white'}`}>3</div>
-                              <div className={`h-12 border-2 border-[#000080] flex items-center justify-center font-bold text-xl rounded ${selectedSeats.includes('4A') ? 'bg-[#000080] text-white' : 'bg-white'}`}>4</div>
-                              <div className={`h-12 border-2 border-[#000080] flex items-center justify-center font-bold text-xl rounded ${selectedSeats.includes('5A') ? 'bg-[#000080] text-white' : 'bg-white'}`}>5</div>
+                              <div className={`h-12 border-2 border-[#000080] flex items-center justify-center font-bold text-xl rounded ${seatsForDisplay.includes('2A') ? 'bg-[#000080] text-white' : 'bg-white'}`}>2</div>
+                              <div className={`h-12 border-2 border-[#000080] flex items-center justify-center font-bold text-xl rounded ${seatsForDisplay.includes('3A') ? 'bg-[#000080] text-white' : 'bg-white'}`}>3</div>
+                              <div className={`h-12 border-2 border-[#000080] flex items-center justify-center font-bold text-xl rounded ${seatsForDisplay.includes('4A') ? 'bg-[#000080] text-white' : 'bg-white'}`}>4</div>
+                              <div className={`h-12 border-2 border-[#000080] flex items-center justify-center font-bold text-xl rounded ${seatsForDisplay.includes('5A') ? 'bg-[#000080] text-white' : 'bg-white'}`}>5</div>
                             </div>
                             <div className="mt-6 text-center text-xs font-bold">
                               <p>No. Tiket: {actualBookingId}</p>
@@ -713,21 +786,24 @@ const InvoiceModal = ({ isOpen, onClose, bookingData, docsMode: docsModeProp, hi
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100">
-                            <tr>
-                              <td className="py-4 px-4">
-                                <p className="font-bold text-slate-800">Travel Ticket ({category})</p>
-                                <p className="text-xs text-slate-500">Seat(s): {selectedSeats.join(', ')}</p>
-                              </td>
-                              <td className="py-4 px-4 text-center text-slate-600">{selectedSeats.length}</td>
-                              <td className="py-4 px-4 text-right font-medium text-slate-800">
-                                Rp {(totalAmount + (discountAmount || 0)).toLocaleString()}
-                              </td>
-                            </tr>
+                            {invoiceRows.map((row) => (
+                              <tr key={row.id}>
+                                <td className="py-4 px-4">
+                                  <p className="font-bold text-slate-800">Travel Ticket ({category})</p>
+                                  <p className="text-xs text-slate-500">Seat: {row.seat}</p>
+                                  {row.name ? <p className="text-xs text-slate-500">{row.name}</p> : null}
+                                </td>
+                                <td className="py-4 px-4 text-center text-slate-600">1</td>
+                                <td className="py-4 px-4 text-right font-medium text-slate-800">
+                                  Rp {Number(row.amount || 0).toLocaleString('id-ID')}
+                                </td>
+                              </tr>
+                            ))}
                           </tbody>
                           <tfoot className="border-t-2 border-slate-900">
                             <tr>
                               <td colSpan="2" className="pt-4 text-right font-bold text-slate-900">Total Paid</td>
-                              <td className="pt-4 px-4 text-right font-bold text-xl text-slate-900">Rp {totalAmount?.toLocaleString()}</td>
+                              <td className="pt-4 px-4 text-right font-bold text-xl text-slate-900">Rp {Number(invoiceTotal || 0).toLocaleString('id-ID')}</td>
                             </tr>
                           </tfoot>
                         </table>

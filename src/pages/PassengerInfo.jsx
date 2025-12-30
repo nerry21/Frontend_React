@@ -78,9 +78,25 @@ function openETicketLegacy(v, navigate) {
 
 // ✅ NEW: buka PDF per passenger langsung dari backend (tanpa pindah ke booking)
 function openPassengerDoc(passengerId, type /* 'eticket' | 'invoice' */) {
-  if (!passengerId) return;
+  if (!passengerId) {
+    window.alert('Dokumen belum tersedia: ID penumpang tidak ditemukan.');
+    return;
+  }
+
   const url = `${API_BASE}/api/passengers/${passengerId}/${type}`;
-  window.open(url, '_blank');
+
+  fetch(url, { method: 'HEAD' })
+    .then((res) => {
+      if (res.status === 403) throw new Error('Pembayaran belum lunas');
+      if (!res.ok) throw new Error(`Dokumen belum tersedia (HTTP ${res.status})`);
+      const win = window.open(url, '_blank', 'noopener,noreferrer');
+      if (!win) {
+        window.alert('Popup diblokir. Izinkan popup untuk membuka dokumen.');
+      }
+    })
+    .catch((err) => {
+      window.alert(err?.message || 'Dokumen belum tersedia.');
+    });
 }
 
 import DashboardLayout from '@/components/DashboardLayout';
@@ -375,7 +391,7 @@ const PassengerInfo = () => {
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Total</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Seat</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Layanan</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">E-Ticket</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Dokumen</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Driver</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Kendaraan</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Aksi</th>
@@ -404,22 +420,32 @@ const PassengerInfo = () => {
                         <div className="flex items-center gap-3">
                           <button
                             type="button"
-                            onClick={() => openPassengerDoc(passenger.id, 'eticket')}
-                            className="inline-flex items-center gap-2 text-yellow-400 hover:text-yellow-300 underline text-sm"
+                            disabled={!passenger.id}
+                            onClick={() => openPassengerDoc(passenger.id, 'e-ticket')}
+                            className={`inline-flex items-center gap-2 underline text-sm ${
+                              passenger.id
+                                ? 'text-yellow-400 hover:text-yellow-300'
+                                : 'text-gray-500 cursor-not-allowed no-underline'
+                            }`}
                             title="Buka E-Ticket (PDF)"
                           >
                             <FileText className="w-4 h-4" />
-                            ETK
+                            E-ticket
                           </button>
 
                           <button
                             type="button"
+                            disabled={!passenger.id}
                             onClick={() => openPassengerDoc(passenger.id, 'invoice')}
-                            className="inline-flex items-center gap-2 text-green-400 hover:text-green-300 underline text-sm"
+                            className={`inline-flex items-center gap-2 underline text-sm ${
+                              passenger.id
+                                ? 'text-green-400 hover:text-green-300'
+                                : 'text-gray-500 cursor-not-allowed no-underline'
+                            }`}
                             title="Buka Invoice (PDF)"
                           >
                             <FileText className="w-4 h-4" />
-                            INV
+                            Invoice
                           </button>
 
                           {/* Legacy DOC (jika eTicketPhoto berupa URL/base64) */}

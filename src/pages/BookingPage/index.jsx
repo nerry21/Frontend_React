@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
 import PaymentModal from '@/components/PaymentModal';
 import InvoiceModal from '@/components/InvoiceModal';
+import PassengerPerSeatForm from '@/components/PassengerPerSeatForm';
 
 // step-2 components
 import RegulerStep from './Reguler';
@@ -1162,6 +1163,27 @@ const BookingPage = () => {
                     *Booking ID belum ada. Pastikan booking dibuat di Step 2 (Reguler) sebelum bayar.
                   </div>
                 )}
+
+                {bookingData.category === 'Reguler' && (bookingData.selectedSeats || []).length ? (
+                  <div className="mb-6">
+                    <PassengerPerSeatForm
+                      selectedSeats={bookingData.selectedSeats}
+                      bookingId={bookingData.bookingId}
+                      onSuccess={() =>
+                        toast({
+                          title: 'Penumpang tersimpan',
+                          description: 'Data penumpang per seat telah dikirim ke backend.',
+                        })
+                      }
+                      onSkip={() =>
+                        toast({
+                          title: 'Lewati input penumpang',
+                          description: 'Lanjutkan pembayaran jika ingin melewati input penumpang per seat.',
+                        })
+                      }
+                    />
+                  </div>
+                ) : null}
 
                 <div className="flex gap-4">
                   <Button variant="outline" onClick={() => setStep(3)} className="w-1/3 border-gray-600">
