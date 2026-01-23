@@ -96,6 +96,40 @@ function isJsonContentType(ct) {
   return s.includes('application/json') || s.includes('text/json');
 }
 
+const normalizeDriverName = (name) => String(name || '').toLowerCase().trim();
+
+const findDriverByName = (driverList, name) => {
+  const target = normalizeDriverName(name);
+  if (!target) return null;
+  return (driverList || []).find((d) => normalizeDriverName(d.name) === target) || null;
+};
+
+const findDriverVehicleTypeFromList = (driverList, name) => {
+  const found = findDriverByName(driverList, name);
+  return found?.vehicleType || '';
+};
+
+const normalizeDepartureItem = (item, driverList = []) => {
+  const driverName = item?.driverName ?? item?.driver_name ?? '';
+  const vehicleCode = item?.vehicleCode ?? item?.vehicle_code ?? '';
+  let vehicleType = item?.vehicleType ?? item?.vehicle_type ?? '';
+
+  const matched = findDriverByName(driverList, driverName);
+  if (!vehicleType && matched?.vehicleType) {
+    vehicleType = matched.vehicleType;
+  }
+
+  return {
+    ...(item || {}),
+    driverName,
+    driver_name: driverName,
+    vehicleCode,
+    vehicle_code: vehicleCode,
+    vehicleType,
+    vehicle_type: vehicleType,
+  };
+};
+
 const PengaturanKeberangkatan = () => {
   const { toast } = useToast();
   const [items, setItems] = useState([]);

@@ -9,8 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
 import SeatSelection from '@/components/SeatSelection';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+import { API_HOST } from '@/lib/api';
 
 // fallback jam kalau backend belum punya endpoint time list
 const FALLBACK_TIMES = ['08:00 WIB', '10:00 WIB', '14:00 WIB', '16:00 WIB', '20:00 WIB'];
@@ -152,7 +151,7 @@ const RegulerStep = (props) => {
     async function loadStops() {
       try {
         setIsLoadingStops(true);
-        const res = await fetch(`${API_URL}/api/reguler/stops`);
+        const res = await fetch(`${API_HOST}/api/reguler/stops`);
         const data = await res.json().catch(() => null);
         if (!res.ok) throw new Error(data?.message || `Gagal load stops (HTTP ${res.status})`);
 
@@ -314,7 +313,7 @@ const RegulerStep = (props) => {
       try {
         setIsLoadingSeats(true);
         const qs = new URLSearchParams({ from, to, date, time });
-        const res = await fetch(`${API_URL}/api/reguler/seats?${qs.toString()}`);
+        const res = await fetch(`${API_HOST}/api/reguler/seats?${qs.toString()}`);
         const data = await res.json().catch(() => null);
         if (!res.ok) throw new Error(data?.message || `Gagal load seats (HTTP ${res.status})`);
 
@@ -353,7 +352,7 @@ const RegulerStep = (props) => {
     let aborted = false;
     const fetchPassengers = async () => {
       try {
-        const res = await fetch(`${API_URL}/api/bookings/${id}/passengers`);
+        const res = await fetch(`${API_HOST}/api/bookings/${id}/passengers`);
         if (!res.ok) return;
         const data = await res.json().catch(() => null);
         if (!data || !Array.isArray(data.passengers)) return;
@@ -409,7 +408,7 @@ const RegulerStep = (props) => {
 
       try {
         setIsLoadingQuote(true);
-        const res = await fetch(`${API_URL}/api/reguler/quote`, {
+        const res = await fetch(`${API_HOST}/api/reguler/quote`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -572,7 +571,7 @@ const RegulerStep = (props) => {
   const canProceed = basicValid && seatValid && passengerNamesValid && quoteValid && !isSubmitting;
 
   async function submitBooking(payload) {
-    const res = await fetch(`${API_URL}/api/reguler/bookings`, {
+    const res = await fetch(`${API_HOST}/api/reguler/bookings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

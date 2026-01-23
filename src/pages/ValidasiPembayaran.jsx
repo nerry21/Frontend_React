@@ -27,10 +27,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/use-toast';
+import { API_BASE, API_HOST } from '@/lib/api';
 
-// gunakan ENV kalau ada
-const API_HOST = import.meta?.env?.VITE_API_URL || 'http://localhost:8080';
-const API_BASE = `${API_HOST}/api`;
 const VALIDASI_API = `${API_BASE}/payment-validations`;
 
 const norm = (v) => String(v || '').trim().toLowerCase();

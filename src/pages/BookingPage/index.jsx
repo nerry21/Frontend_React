@@ -22,14 +22,13 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
 import PaymentModal from '@/components/PaymentModal';
 import InvoiceModal from '@/components/InvoiceModal';
-import PassengerPerSeatForm from '@/components/PassengerPerSeatForm';
+// ❌ DIHAPUS: PassengerPerSeatForm
+import { API_HOST } from '@/lib/api';
 
 // step-2 components
 import RegulerStep from './Reguler';
 import DroppingStep from './Dropping';
 import PaketBarangStep from './PaketBarang';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 
 const REGULER_PRICE_PER_SEAT = 150000;
 const REGULER_MAX_PAX = 6;
@@ -167,6 +166,8 @@ const BookingPage = () => {
       if (step !== 1) return;
 
       const params = new URLSearchParams(location.search);
+
+
 
       // ✅ NEW: kalau ada bookingId dari URL, biarkan URL yang menangani
       const bookingIdFromUrl = Number(params.get('bookingId') || params.get('id') || 0);
@@ -355,7 +356,7 @@ const BookingPage = () => {
 
       // 1) Coba endpoint booking detail (kalau ada)
       try {
-        const r = await fetch(`${API_URL}/api/reguler/bookings/${bookingId}`);
+        const r = await fetch(`${API_HOST}/api/reguler/bookings/${bookingId}`);
         if (r.ok) {
           const d = await r.json().catch(() => ({}));
           const nextStatus = d.paymentStatus || d.payment_status || '';
@@ -368,10 +369,21 @@ const BookingPage = () => {
           const nextTo = d.to || d.toCity || d.to_city || d.route_to || '';
           const nextDate = d.date || d.trip_date || d.departure_date || '';
           const nextTime = d.time || d.trip_time || d.departure_time || '';
-          const nextName = d.passengerName || d.passenger_name || d.bookingFor || d.booking_for || '';
+          const nextName =
+            d.passengerName || d.passenger_name || d.bookingFor || d.booking_for || '';
           const nextPhone = d.passengerPhone || d.passenger_phone || '';
-          const nextPickup = d.pickupLocation || d.pickup_location || d.pickupAddress || d.pickup_address || '';
-          const nextDrop = d.dropoffLocation || d.dropoff_location || d.dropoffAddress || d.dropoff_address || '';
+          const nextPickup =
+            d.pickupLocation ||
+            d.pickup_location ||
+            d.pickupAddress ||
+            d.pickup_address ||
+            '';
+          const nextDrop =
+            d.dropoffLocation ||
+            d.dropoff_location ||
+            d.dropoffAddress ||
+            d.dropoff_address ||
+            '';
           const nextSeats = parseSeatsFlexible(
             d.selectedSeats || d.selected_seats || d.seats || d.seats_json
           );
@@ -395,7 +407,9 @@ const BookingPage = () => {
               if (Number(prev.bookingId || 0) !== Number(bookingId)) return prev;
 
               const mergedSeats =
-                Array.isArray(nextSeats) && nextSeats.length > 0 ? nextSeats : prev.selectedSeats;
+                Array.isArray(nextSeats) && nextSeats.length > 0
+                  ? nextSeats
+                  : prev.selectedSeats;
 
               return {
                 ...prev,
@@ -411,7 +425,9 @@ const BookingPage = () => {
                 selectedSeats: mergedSeats,
                 passengerCount: mergedSeats?.length ? mergedSeats.length : prev.passengerCount,
                 pricePerSeat:
-                  (nextCategory || prev.category) === 'Reguler' ? REGULER_PRICE_PER_SEAT : prev.pricePerSeat,
+                  (nextCategory || prev.category) === 'Reguler'
+                    ? REGULER_PRICE_PER_SEAT
+                    : prev.pricePerSeat,
 
                 paymentStatus: nextStatus || prev.paymentStatus,
                 paymentMethod: nextMethod || prev.paymentMethod,
@@ -429,7 +445,7 @@ const BookingPage = () => {
 
       // 2) Fallback: coba payment-validations?bookingId=...
       try {
-        const r2 = await fetch(`${API_URL}/api/payment-validations?bookingId=${bookingId}`);
+        const r2 = await fetch(`${API_HOST}/api/payment-validations?bookingId=${bookingId}`);
         if (r2.ok) {
           const d2 = await r2.json().catch(() => null);
 
@@ -464,13 +480,15 @@ const BookingPage = () => {
 
       // 3) Fallback terakhir: ambil semua payment-validations (kurang ideal tapi aman)
       try {
-        const r3 = await fetch(`${API_URL}/api/payment-validations`);
+        const r3 = await fetch(`${API_HOST}/api/payment-validations`);
         if (!r3.ok) return;
 
         const all = await r3.json().catch(() => []);
         if (!Array.isArray(all)) return;
 
-        const item = all.find((x) => Number(x?.bookingId || x?.booking_id || 0) === Number(bookingId));
+        const item = all.find(
+          (x) => Number(x?.bookingId || x?.booking_id || 0) === Number(bookingId)
+        );
         if (!item) return;
 
         const raw = item.status || item.paymentStatus || item.payment_status || '';
@@ -649,8 +667,10 @@ const BookingPage = () => {
 
     if (bookingData.category === 'Dropping') {
       if (bookingData.passengerCount > 7) return 'Maximum 7 passengers allowed for Dropping.';
-      if (bookingData.pickupLocations.some((l) => !l.trim())) return 'Please fill all pickup locations.';
-      if (bookingData.dropoffLocations.some((l) => !l.trim())) return 'Please fill all dropoff locations.';
+      if (bookingData.pickupLocations.some((l) => !l.trim()))
+        return 'Please fill all pickup locations.';
+      if (bookingData.dropoffLocations.some((l) => !l.trim()))
+        return 'Please fill all dropoff locations.';
     }
 
     if (bookingData.category === 'Rental') {
@@ -1164,26 +1184,7 @@ const BookingPage = () => {
                   </div>
                 )}
 
-                {bookingData.category === 'Reguler' && (bookingData.selectedSeats || []).length ? (
-                  <div className="mb-6">
-                    <PassengerPerSeatForm
-                      selectedSeats={bookingData.selectedSeats}
-                      bookingId={bookingData.bookingId}
-                      onSuccess={() =>
-                        toast({
-                          title: 'Penumpang tersimpan',
-                          description: 'Data penumpang per seat telah dikirim ke backend.',
-                        })
-                      }
-                      onSkip={() =>
-                        toast({
-                          title: 'Lewati input penumpang',
-                          description: 'Lanjutkan pembayaran jika ingin melewati input penumpang per seat.',
-                        })
-                      }
-                    />
-                  </div>
-                ) : null}
+                {/* ✅ DIHAPUS: Data Penumpang per Seat */}
 
                 <div className="flex gap-4">
                   <Button variant="outline" onClick={() => setStep(3)} className="w-1/3 border-gray-600">

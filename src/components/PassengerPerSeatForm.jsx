@@ -4,6 +4,7 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
+import { API_HOST } from '@/lib/api';
 
 /**
  * Dual-mode:
@@ -85,12 +86,14 @@ const PassengerPerSeatForm = ({
                     <Input
                       value={row.passengerPhone}
                       onChange={(e) => onChange(seatCode, 'passengerPhone', e.target.value)}
-                      placeholder="0812..."
-                      className={`pl-9 bg-slate-900 text-white h-10 ${
-                        phoneInvalid ? 'border-red-500' : 'border-slate-700'
-                      }`}
-                    />
-                  </div>
+                    placeholder="0812..."
+                    type="text"
+                    inputMode="numeric"
+                    className={`pl-9 bg-slate-900 text-white h-10 ${
+                      phoneInvalid ? 'border-red-500' : 'border-slate-700'
+                    }`}
+                  />
+                </div>
                   {phoneInvalid ? (
                     <div className="text-xs text-red-300">No HP minimal 6 digit (angka/+)</div>
                   ) : null}
@@ -130,7 +133,7 @@ const PassengerPerSeatForm = ({
     const fetchPrefill = async () => {
       try {
         setPrefillLoading(true);
-        const urlBase = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+        const urlBase = API_HOST;
         const res = await fetch(`${urlBase}/api/bookings/${bookingId}/passengers`, { signal: controller.signal });
         if (!res.ok) {
           if (res.status === 404) setMessage('Fitur belum tersedia');
@@ -191,12 +194,12 @@ const PassengerPerSeatForm = ({
     if (!validate()) return;
 
     const payloadArray = rows.map((r) => ({
-      seatCode: r.seatCode,
-      passengerName: String(r.passengerName || '').trim(),
-      passengerPhone: String(r.passengerPhone || '').trim(),
+      seat_code: r.seatCode,
+      passenger_name: String(r.passengerName || '').trim(),
+      passenger_phone: String(r.passengerPhone || '').replace(/\s+/g, '').trim(),
     }));
 
-    const urlBase = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+    const urlBase = API_HOST;
     const url = `${urlBase}/api/bookings/${bookingId}/passengers`;
 
     const sendPayload = async (body) => {
@@ -311,6 +314,8 @@ const PassengerPerSeatForm = ({
                     value={row.passengerPhone}
                     onChange={(e) => setRowValue(row.seatCode, 'passengerPhone', e.target.value)}
                     placeholder="0812..."
+                    type="text"
+                    inputMode="numeric"
                     className="pl-9 bg-slate-900 border-slate-700 text-white h-10"
                   />
                 </div>

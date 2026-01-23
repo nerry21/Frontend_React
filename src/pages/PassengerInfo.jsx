@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
+import { API_HOST } from '@/lib/api';
 
 // ==============================
 // Helpers: handle E-Ticket value
@@ -23,7 +24,6 @@ import { useToast } from '@/components/ui/use-toast';
 // - bisa berupa URL relatif (mis. /uploads/.. atau /api/..)
 // - bisa berupa marker: "BOOKING:<id>" atau "ETICKET_INVOICE_FROM_BOOKING:<id>"
 // ==============================
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 const BOOKING_PAGE_PATH = import.meta.env.VITE_BOOKING_PAGE_PATH || '/booking';
 
 function isBookingMarker(v) {
@@ -53,7 +53,7 @@ function resolveToAbsoluteUrl(v) {
   if (v.startsWith('data:')) return v;
   if (v.startsWith('http://') || v.startsWith('https://')) return v;
   if (isBookingMarker(v)) return '';
-  if (v.startsWith('/')) return `${API_BASE}${v}`;
+  if (v.startsWith('/')) return `${API_HOST}${v}`;
   return v;
 }
 
@@ -83,7 +83,7 @@ function openPassengerDoc(passengerId, type /* 'eticket' | 'invoice' */) {
     return;
   }
 
-  const url = `${API_BASE}/api/passengers/${passengerId}/${type}`;
+  const url = `${API_HOST}/api/passengers/${passengerId}/${type}`;
 
   fetch(url, { method: 'HEAD' })
     .then((res) => {
@@ -131,7 +131,7 @@ const PassengerInfo = () => {
 
   const fetchPassengers = async () => {
     try {
-      const response = await fetch(`${API_BASE}/api/passengers`);
+      const response = await fetch(`${API_HOST}/api/passengers`);
       if (!response.ok) throw new Error('Failed to fetch passengers');
       const data = await response.json();
       setPassengers(Array.isArray(data) ? data : []);
@@ -219,8 +219,8 @@ const PassengerInfo = () => {
 
     try {
       const url = currentPassenger
-        ? `${API_BASE}/api/passengers/${currentPassenger.id}`
-        : `${API_BASE}/api/passengers`;
+        ? `${API_HOST}/api/passengers/${currentPassenger.id}`
+        : `${API_HOST}/api/passengers`;
       const method = currentPassenger ? 'PUT' : 'POST';
 
       const response = await fetch(url, {
@@ -255,7 +255,7 @@ const PassengerInfo = () => {
 
     try {
       const response = await fetch(
-        `${API_BASE}/api/passengers/${currentPassenger.id}`,
+        `${API_HOST}/api/passengers/${currentPassenger.id}`,
         { method: 'DELETE' }
       );
 

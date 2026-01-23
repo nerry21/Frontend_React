@@ -9,10 +9,7 @@ import { useToast } from '@/components/ui/use-toast';
 import CrudActions from '@/components/CrudActions';
 import UserFormModal from '@/components/UserFormModal';
 import UserViewModal from '@/components/UserViewModal';
-
-// Bisa pakai ENV kalau mau: VITE_API_BASE_URL
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api';
+import { API_BASE } from '@/lib/api';
 
 const roleLabelMap = {
   owner: 'OWNER',
@@ -43,7 +40,7 @@ const AdminUserData = () => {
 
   const loadUsers = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/users`);
+      const res = await fetch(`${API_BASE}/users`);
       if (!res.ok) {
         throw new Error('Gagal mengambil data users');
       }
@@ -96,7 +93,7 @@ const AdminUserData = () => {
     if (!window.confirm('Yakin ingin menghapus user ini?')) return;
 
     try {
-      const res = await fetch(`${API_BASE_URL}/users/${id}`, {
+      const res = await fetch(`${API_BASE}/users/${id}`, {
         method: 'DELETE',
       });
 
@@ -138,7 +135,7 @@ const AdminUserData = () => {
           password: formData.password || '123456',
         };
 
-        const res = await fetch(`${API_BASE_URL}/users`, {
+        const res = await fetch(`${API_BASE}/users`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -164,7 +161,7 @@ const AdminUserData = () => {
           status: formData.status || selectedUser.status || 'active',
         };
 
-        const res = await fetch(`${API_BASE_URL}/users/${selectedUser.id}`, {
+        const res = await fetch(`${API_BASE}/users/${selectedUser.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),

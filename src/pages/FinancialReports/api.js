@@ -1,13 +1,8 @@
 // src/pages/FinancialReports/api.js
+import { API_BASE as SHARED_API_BASE, API_HOST } from '@/lib/api';
 
-// Contoh ENV yang aman:
-// VITE_API_URL=http://localhost:8080   (tanpa /api)
-// Kalau terlanjur pakai http://localhost:8080/api, file ini tetap aman (tidak dobel /api)
-
-const RAW_BASE = (import.meta.env.VITE_API_URL ?? '').trim();
-
-// buang trailing slash
-const API_BASE = RAW_BASE.replace(/\/+$/, '');
+// gunakan config terpadu; fallback ke host + /api jika diperlukan
+const API_BASE = (SHARED_API_BASE || `${API_HOST}/api`).replace(/\/+$/, '');
 
 // cek absolute url
 function isAbsoluteUrl(p) {

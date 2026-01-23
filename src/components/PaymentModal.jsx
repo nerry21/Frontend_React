@@ -4,8 +4,7 @@ import { CreditCard, Smartphone, Banknote, Copy, Check, Upload, Loader2 } from '
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/use-toast';
-
-const API_BASE = import.meta?.env?.VITE_API_URL || 'http://localhost:8080';
+import { API_HOST } from '@/lib/api';
 
 // ✅ Batasi ukuran file yang dipilih (sebelum jadi base64)
 // (Base64 biasanya ~33% lebih besar dari file asli)
@@ -343,7 +342,7 @@ const PaymentModal = ({ isOpen, onClose, amount, bookingId, onPaymentComplete })
     if (!bookingId) throw new Error('bookingId belum tersedia. Pastikan booking sudah dibuat sebelum bayar.');
     if (!proofFile) throw new Error('Mohon upload bukti pembayaran terlebih dahulu.');
 
-    const res = await fetch(`${API_BASE}/api/reguler/bookings/${bookingId}/submit-payment`, {
+    const res = await fetch(`${API_HOST}/api/reguler/bookings/${bookingId}/submit-payment`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -362,7 +361,7 @@ const PaymentModal = ({ isOpen, onClose, amount, bookingId, onPaymentComplete })
   const confirmCashToBackend = async () => {
     if (!bookingId) throw new Error('bookingId belum tersedia. Pastikan booking sudah dibuat sebelum bayar.');
 
-    const res = await fetch(`${API_BASE}/api/reguler/bookings/${bookingId}/confirm-cash`, {
+    const res = await fetch(`${API_HOST}/api/reguler/bookings/${bookingId}/confirm-cash`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
